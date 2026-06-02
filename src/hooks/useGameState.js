@@ -213,17 +213,61 @@ function getValidTargets(unit, allUnits) {
 
 /**
  * Create the initial game state.
+ * @param {'skirmish'|'waveDefense'} mode
  */
-function createInitialGameState() {
-  // Generate the map with an initial seed
+function createInitialGameState(mode = 'skirmish') {
   setMap(42, GRID_WIDTH, GRID_HEIGHT);
+
+  if (mode === 'waveDefense') {
+    // Wave Defense: player ships on left, no initial AI, no treasures
+    const leftTiles = findOceanTilesInColumns(0, 3);
+    function getPositions(tiles, count) {
+      if (tiles.length >= count) {
+        const step = (tiles.length - 1) / Math.max(count - 1, 1);
+        const selected = [];
+        for (let i = 0; i < count; i++) {
+          selected.push(tiles[Math.round(i * step)]);
+        }
+        return selected;
+      }
+      return tiles.slice(0, count);
+    }
+    const playerPos = getPositions(leftTiles, 3);
+    const units = [
+      createUnit('galleon',    'player', playerPos[0].q, playerPos[0].r),
+      createUnit('brigantine', 'player', playerPos[1].q, playerPos[1].r),
+      createUnit('sloop',      'player', playerPos[2].q, playerPos[2].r),
+    ];
+
+    const highScore = getHighScore();
+    return {
+      gameMode: 'waveDefense',
+      currentTurn: 1,
+      wave: 1,
+      highScore,
+      gamePhase: 'playerTurn',
+      units,
+      selectedUnitId: null,
+      winner: null,
+      lastAttack: null,
+      treasures: [],
+      playerTreasures: 0,
+      aiTreasures: 0,
+      upgradeBonuses: { hp: 0, movement: 0, attack: 0 },
+      lastUpgradeTurn: 0,
+    };
+  }
+
+  // Skirmish mode (original behaviour)
   const units = createInitialUnits();
-  // Get unit spawn positions so we don't place treasures on them
   const unitPositions = units.map(u => ({ q: u.q, r: u.r }));
   const treasures = generateTreasures(unitPositions);
 
   return {
+    gameMode: 'skirmish',
     currentTurn: 1,
+    wave: 1,
+    highScore: 0,
     gamePhase: 'playerTurn', // 'playerTurn' | 'aiTurn' | 'upgradePhase' | 'gameOver'
     units,
     selectedUnitId: null,
@@ -240,14 +284,83 @@ function createInitialGameState() {
 /**
  * Custom hook for managing all game state.
  */
-export function useGameState() {
-  const [gameState, setGameState] = useState(createInitialGameState);
+/**
+ * Read high score from localStorage.
+ */
+function getHighScore() {
+  try {
+    return parseInt(localStorage.getItem('plunder-peril-highscore') || '0', 10);
+  } catch { return 0; }
+}
+
+/**
+ * Save high score to localStorage.
+ */
+function setHighScore(score) {
+  try {
+    const current = getHighScore();
+    if (score > current) {
+      localStorage.setItem('plunder-peril-highscore', String(score));
+    }
+  } catch { /* ignore */ }
+}
+
+/**
+ * Generate units for a wave in waveDefense mode.
+ * Ships spawn on the right side (columns 7-9) on navigable tiles.
+ */
+function spawnWaveUnits(wave, currentUnits) {
+  const occupiedSet = new Set();
+  currentUnits.forEach(u => {
+    if (u.hp > 0) occupiedSet.add(`${u.q},${u.r}`);
+  });
+
+  // Find spawn positions on the right side
+  const tiles = [];
+  for (let q = 7; q <= 9; q++) {
+    for (let r = 0; r < 10; r++) {
+      const terrain = getTileTerrain(q, r);
+      if ((terrain === TERRAIN.OCEAN || terrain === TERRAIN.SHALLOW) &&
+          !occupiedSet.has(`${q},${r}`)) {
+        tiles.push({ q, r });
+      }
+    }
+  }
+
+  // Shuffle
+  for (let i = tiles.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
+  }
+
+  // Determine count & composition
+  const count = Math.min(2 + Math.floor(wave * 0.6), 8);
+
+  // Composition grows with waves
+  const types = ['sloop'];
+  if (wave >= 2) types.push('sloop', 'brigantine');
+  if (wave >= 4) types.push('brigantine');
+  if (wave >= 6) types.push('galleon');
+  if (wave >= 8) { types.push('galleon'); types.push('brigantine'); }
+
+  const units = [];
+  const spawnCount = Math.min(count, tiles.length);
+  for (let i = 0; i < spawnCount; i++) {
+    const type = types[Math.floor(Math.random() * types.length)];
+    units.push(createUnit(type, 'ai', tiles[i].q, tiles[i].r));
+  }
+
+  return units;
+}
+
+export function useGameState({ gameMode = 'skirmish' } = {}) {
+  const [gameState, setGameState] = useState(() => createInitialGameState(gameMode));
 
   // Ref for reading current state inside callbacks without re-renders
   const gameStateRef = useRef(gameState);
   gameStateRef.current = gameState;
 
-  const { units, selectedUnitId, currentTurn, gamePhase, winner, lastAttack, treasures, playerTreasures, aiTreasures, upgradeBonuses } = gameState;
+  const { units, selectedUnitId, currentTurn, gamePhase, winner, lastAttack, treasures, playerTreasures, aiTreasures, upgradeBonuses, wave, highScore } = gameState;
 
   // Derived: the currently selected unit object
   const selectedUnit = useMemo(
@@ -660,8 +773,8 @@ export function useGameState() {
         };
       }
 
-      // Check treasure victory after AI turn
-      if (currentTreasures.length === 0) {
+      // Check treasure victory after AI turn (skirmish mode only)
+      if (prev.gameMode !== 'waveDefense' && currentTreasures.length === 0) {
         return {
           ...prev,
           units: updatedUnits,
@@ -675,9 +788,39 @@ export function useGameState() {
         };
       }
 
-      // Switch back to player turn (or upgrade phase every 3 turns)
+      // ── Wave Defense: check if all enemies are destroyed ──
+      if (prev.gameMode === 'waveDefense') {
+        const remainingAI = updatedUnits.filter(u => u.owner === 'ai' && u.hp > 0);
+        if (remainingAI.length === 0) {
+          // Wave cleared!
+          const nextWave = prev.wave + 1;
+          // Save high score (waves survived = nextWave - 1)
+          const wavesSurvived = nextWave - 1;
+          setHighScore(wavesSurvived);
+
+          // Check for upgrade every 3 waves
+          const needsUpgrade = wavesSurvived % 3 === 0 && wavesSurvived > 0;
+
+          // Spawn next wave enemies
+          const newEnemies = spawnWaveUnits(nextWave, updatedUnits);
+          const allUnits = [...updatedUnits, ...newEnemies];
+
+          return {
+            ...prev,
+            units: allUnits,
+            selectedUnitId: null,
+            currentTurn: prev.currentTurn + 1,
+            wave: nextWave,
+            highScore: Math.max(prev.highScore, wavesSurvived),
+            gamePhase: needsUpgrade ? 'upgradePhase' : 'playerTurn',
+            lastAttack: aiLastAttack,
+          };
+        }
+      }
+
+      // Switch back to player turn (or upgrade phase every 3 turns, skirmish only)
       const nextTurn = prev.currentTurn + 1;
-      const needsUpgrade = nextTurn % 3 === 0 && nextTurn > 0;
+      const needsUpgrade = prev.gameMode !== 'waveDefense' && nextTurn % 3 === 0 && nextTurn > 0;
       return {
         ...prev,
         units: updatedUnits,
@@ -749,6 +892,9 @@ export function useGameState() {
     playerTreasures,
     aiTreasures,
     upgradeBonuses,
+    gameMode,
+    wave,
+    highScore,
 
     // Actions
     selectUnit,

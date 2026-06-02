@@ -68,7 +68,7 @@ const SHIP_SIZE = {
   galleon: 0.85,
 };
 
-function GameBoard() {
+export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
   const canvasRef = useRef(null);
   const particleCanvasRef = useRef(null);
   const [hoveredHex, setHoveredHex] = useState(null);
@@ -94,7 +94,7 @@ function GameBoard() {
   hoveredHexRef.current = hoveredHex;
 
   // Game state hook
-  const game = useGameState();
+  const game = useGameState({ gameMode: initialMode });
   const gameStateRef = useRef(game);
   gameStateRef.current = game;
 
@@ -918,19 +918,26 @@ function GameBoard() {
         }}
       >
         <div style={{ fontWeight: 'bold', fontSize: 18, color: '#f0c040' }}>
-          ⚓ Turn {game.currentTurn}
+          {game.gameMode === 'waveDefense' ? `🌊 Wave ${game.wave}` : `⚓ Turn ${game.currentTurn}`}
         </div>
         <div style={{ marginTop: 2, fontSize: 14, color: game.gamePhase === 'playerTurn' ? '#88ddff' : '#ff8888' }}>
-          {game.gamePhase === 'playerTurn' && 'Your Move'}
+          {game.gamePhase === 'playerTurn' && (game.gameMode === 'waveDefense' ? 'Defend!' : 'Your Move')}
           {game.gamePhase === 'aiTurn' && 'Enemy Turn...'}
+          {game.gamePhase === 'upgradePhase' && '⚡ Prepare!'}
           {game.gamePhase === 'gameOver' && (game.winner === 'player' ? 'Victory!' : 'Defeat')}
         </div>
         <div style={{ marginTop: 4, fontSize: 12, color: '#888' }}>
           Ships: {game.playerUnits.length}vs{game.aiUnits.length}
         </div>
-        <div style={{ marginTop: 4, fontSize: 13, color: '#ffd700' }}>
-          💰 Treasure: {game.playerTreasures} — {game.aiTreasures} | Left: {game.treasures.length}
-        </div>
+        {game.gameMode === 'waveDefense' ? (
+          <div style={{ marginTop: 4, fontSize: 12, color: '#ffaa44' }}>
+            🏆 High Score: {game.highScore}
+          </div>
+        ) : (
+          <div style={{ marginTop: 4, fontSize: 13, color: '#ffd700' }}>
+            💰 Treasure: {game.playerTreasures} — {game.aiTreasures} | Left: {game.treasures.length}
+          </div>
+        )}
         {(game.upgradeBonuses.hp > 0 || game.upgradeBonuses.movement > 0 || game.upgradeBonuses.attack > 0) && (
           <div style={{ marginTop: 4, fontSize: 11, color: '#88ddff', display: 'flex', gap: 8 }}>
             {game.upgradeBonuses.hp > 0 && <span>❤️+{game.upgradeBonuses.hp}</span>}
@@ -1095,7 +1102,9 @@ function GameBoard() {
             ⬆️ Ship Upgrade!
           </div>
           <div style={{ color: '#aaa', fontSize: 14, marginBottom: 24, fontFamily: 'Georgia, serif' }}>
-            Turn {game.currentTurn} — choose a bonus for your entire fleet
+            {game.gameMode === 'waveDefense'
+              ? `Wave ${game.wave - 1} cleared! Choose a bonus for your fleet`
+              : `Turn ${game.currentTurn} — choose a bonus for your entire fleet`}
           </div>
           <div style={{ display: 'flex', gap: 16 }}>
             {/* HP upgrade */}
@@ -1189,17 +1198,28 @@ function GameBoard() {
               fontSize: 48,
               fontWeight: 'bold',
               fontFamily: 'Georgia, serif',
-              color: game.winner === 'player' ? '#ffd700' : '#cc4444',
-              textShadow: '0 0 30px rgba(255, 215, 0, 0.5)',
+              color: game.gameMode === 'skirmish' && game.winner === 'player' ? '#ffd700' : '#cc4444',
+              textShadow: game.gameMode === 'skirmish' && game.winner === 'player'
+                ? '0 0 30px rgba(255, 215, 0, 0.5)'
+                : '0 0 30px rgba(255, 255, 255, 0.3)',
               marginBottom: 12,
             }}
           >
-            {game.winner === 'player' ? '🏴‍☠️ Victory!' : '💀 Defeat...'}
+            {game.gameMode === 'skirmish' && game.winner === 'player' ? '🏴‍☠️ Victory!' : '💀 Defeat...'}
           </div>
-          <div style={{ color: '#aaa', fontSize: 18, marginBottom: 24 }}>
-            {game.winner === 'player'
+          <div style={{ color: '#aaa', fontSize: 18, marginBottom: 8 }}>
+            {game.gameMode === 'skirmish' && game.winner === 'player'
               ? 'All enemy ships have been sunk!'
               : 'Your fleet has been destroyed.'}
+          </div>
+          {game.gameMode === 'waveDefense' && (
+            <div style={{ color: '#ffaa44', fontSize: 22, marginBottom: 4, fontFamily: 'Georgia, serif' }}>
+              🌊 Survived {game.wave - 1} waves
+            </div>
+          )}
+          <div style={{ color: '#ffaa44', fontSize: 14, marginBottom: 24 }}>
+            🏆 {game.gameMode === 'waveDefense' ? 'Best: ' : 'Treasures: '}
+            {game.gameMode === 'waveDefense' ? game.highScore : game.playerTreasures}
           </div>
           <button
             onClick={() => window.location.reload()}
@@ -1222,5 +1242,3 @@ function GameBoard() {
     </div>
   );
 }
-
-export default GameBoard;
