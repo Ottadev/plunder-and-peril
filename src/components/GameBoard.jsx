@@ -9,6 +9,14 @@ import {
   getTerrainColor,
 } from '../hooks/useHexGrid.js';
 import { useGameState, UNIT_TYPES } from '../hooks/useGameState.js';
+import {
+  updateParticles,
+  drawParticles,
+  spawnWaterWake,
+  spawnCannonImpact,
+  spawnShipExplosion,
+  spawnWaterRipple,
+} from '../effects/ParticleEngine.js';
 
 // ── Asset imports (Vite returns URL strings, so we wrap in Image()) ──
 import sloopUrl from '../assets/sloop.jpg';
@@ -21,6 +29,7 @@ import heartUrl from '../assets/heart.jpg';
 import bootUrl from '../assets/boot.jpg';
 import crosscannonUrl from '../assets/crosscannon.jpg';
 import explosionUrl from '../assets/explosion.jpg';
+import treasurechestUrl from '../assets/treasurechest.jpg';
 
 // Convert Vite URL strings to HTMLImageElements for ctx.drawImage()
 function makeImg(url) { const i = new Image(); i.src = url; return i; }
@@ -34,6 +43,7 @@ const heartImg = makeImg(heartUrl);
 const bootImg = makeImg(bootUrl);
 const crosscannonImg = makeImg(crosscannonUrl);
 const explosionImg = makeImg(explosionUrl);
+const treasurechestImg = makeImg(treasurechestUrl);
 
 const GRID_WIDTH = 10;
 const GRID_HEIGHT = 10;
@@ -54,6 +64,7 @@ const SHIP_SIZE = {
 
 function GameBoard() {
   const canvasRef = useRef(null);
+  const particleCanvasRef = useRef(null);
   const [hoveredHex, setHoveredHex] = useState(null);
   const lastHoveredHexRef = useRef(null);
   const gridOffsetRef = useRef({ offsetX: 0, offsetY: 0 });
@@ -61,6 +72,15 @@ function GameBoard() {
   const hoveredHexRef = useRef(null);
   const [explosionEffect, setExplosionEffect] = useState(null);
   const prevLastAttackRef = useRef(null);
+  const prevUnitPositionsRef = useRef(new Map());
+  const prevAliveRef = useRef(new Set());
+  const rafRef = useRef(null);
+  const lastFrameTimeRef = useRef(0);
+  const rippleTimerRef = useRef(0);
+
+  // ── Ship movement animation state ──
+  const isAnimatingRef = useRef(false);
+  const animationRef = useRef(null);
 
   // Keep a ref synced with current hoveredHex to avoid stale closures in event handlers
   hoveredHexRef.current = hoveredHex;
@@ -70,10 +90,53 @@ function GameBoard() {
   const gameStateRef = useRef(game);
   gameStateRef.current = game;
 
-  // ── Explosion effect from lastAttack ──
+  // ── Particle effects: movement detection + attack/explosion ──
+  useEffect(() => {
+    const offset = gridOffsetRef.current;
+
+    // Track ship movement → spawn water wake
+    const currentPositions = new Map();
+    for (const unit of game.units) {
+      if (unit.hp <= 0) continue;
+      const key = unit.id;
+      currentPositions.set(key, { q: unit.q, r: unit.r });
+      const prev = prevUnitPositionsRef.current.get(key);
+      if (prev && (prev.q !== unit.q || prev.r !== unit.r)) {
+        // Ship moved — spawn wake at old position
+        const oldPixel = hexToPixel(prev.q, prev.r);
+        spawnWaterWake(oldPixel.x + offset.offsetX, oldPixel.y + offset.offsetY);
+        // Also spawn at midpoint for longer moves
+        const newPixel = hexToPixel(unit.q, unit.r);
+        const midX = (oldPixel.x + newPixel.x) / 2 + offset.offsetX;
+        const midY = (oldPixel.y + newPixel.y) / 2 + offset.offsetY;
+        spawnWaterWake(midX, midY);
+      }
+    }
+    prevUnitPositionsRef.current = currentPositions;
+
+    // Track destroyed ships → spawn explosion particles
+    const currentAlive = new Set(game.units.filter(u => u.hp > 0).map(u => u.id));
+    for (const id of prevAliveRef.current) {
+      if (!currentAlive.has(id)) {
+        // This ship was destroyed — find its last position from current units array
+        const deadUnit = game.units.find(u => u.id === id);
+        if (deadUnit) {
+          const pixel = hexToPixel(deadUnit.q, deadUnit.r);
+          spawnShipExplosion(pixel.x + offset.offsetX, pixel.y + offset.offsetY);
+        }
+      }
+    }
+    prevAliveRef.current = currentAlive;
+  }, [game.units]);
+
+  // ── Explosion effect from lastAttack → spawn cannon impact particles ──
   useEffect(() => {
     if (game.lastAttack && game.lastAttack !== prevLastAttackRef.current) {
       prevLastAttackRef.current = game.lastAttack;
+      const offset = gridOffsetRef.current;
+      const pixel = hexToPixel(game.lastAttack.q, game.lastAttack.r);
+      spawnCannonImpact(pixel.x + offset.offsetX, pixel.y + offset.offsetY);
+
       setExplosionEffect({
         q: game.lastAttack.q,
         r: game.lastAttack.r,
@@ -86,8 +149,9 @@ function GameBoard() {
 
   // ────────────────────────────── DRAW FUNCTION ──────────────────────────────
 
-  const draw = useCallback((ctx, width, height, hover, state, explosion) => {
+  const draw = useCallback((ctx, width, height, hover, state, explosion, animatingUnitPos) => {
     // state = { units, selectedUnit, validMoveSet, validTargetSet } or null
+    // animatingUnitPos = { unitId, cx, cy } | null — override position for animated unit
     ctx.clearRect(0, 0, width, height);
 
     // Calculate the pixel offset to center the grid
@@ -97,6 +161,9 @@ function GameBoard() {
 
     const offsetX = width / 2 - centerPixel.x;
     const offsetY = height / 2 - centerPixel.y;
+
+    // Store offset for event handlers and particle spawning
+    gridOffsetRef.current = { offsetX, offsetY };
 
     // ── Helper: draw hex path ──
     const drawHexPath = (cx, cy) => {
@@ -185,9 +252,16 @@ function GameBoard() {
       for (const unit of state.units) {
         if (unit.hp <= 0) continue;
 
-        const { x, y } = hexToPixel(unit.q, unit.r);
-        const cx = x + offsetX;
-        const cy = y + offsetY;
+        // Use animated position if this unit is currently animating
+        let cx, cy;
+        if (animatingUnitPos && animatingUnitPos.unitId === unit.id) {
+          cx = animatingUnitPos.cx;
+          cy = animatingUnitPos.cy;
+        } else {
+          const { x, y } = hexToPixel(unit.q, unit.r);
+          cx = x + offsetX;
+          cy = y + offsetY;
+        }
 
         const spriteImg = SHIP_SPRITES[unit.type];
         const sizeFactor = SHIP_SIZE[unit.type] || 0.7;
@@ -289,6 +363,45 @@ function GameBoard() {
       }
     }
 
+    // ── 4b. Draw treasure chests on map ──
+    if (state && state.treasures) {
+      for (const treasure of state.treasures) {
+        const { x, y } = hexToPixel(treasure.q, treasure.r);
+        const cx = x + offsetX;
+        const cy = y + offsetY;
+        const chestSize = HEX_RADIUS * 0.55;
+
+        // Glowing golden highlight behind the chest
+        ctx.save();
+        drawHexPath(cx, cy);
+        ctx.fillStyle = 'rgba(255, 215, 0, 0.15)';
+        ctx.fill();
+        ctx.restore();
+
+        // Pulsing glow effect
+        const pulse = 0.7 + 0.3 * Math.sin(Date.now() * 0.003);
+        ctx.save();
+        ctx.shadowColor = '#ffd700';
+        ctx.shadowBlur = 12 * pulse;
+
+        if (treasurechestImg && treasurechestImg.complete && treasurechestImg.naturalWidth > 0) {
+          ctx.drawImage(treasurechestImg, cx - chestSize, cy - chestSize, chestSize * 2, chestSize * 2);
+        } else {
+          // Fallback: golden circle with "?" if image not loaded
+          ctx.fillStyle = '#ffd700';
+          ctx.beginPath();
+          ctx.arc(cx, cy, chestSize * 0.7, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillStyle = '#2a1a0a';
+          ctx.font = `bold ${Math.round(chestSize)}px Georgia`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('?', cx, cy);
+        }
+        ctx.restore();
+      }
+    }
+
     // ── 5. Draw hover highlight overlay (top-most) ──
     if (hover) {
       const { x, y } = hexToPixel(hover.q, hover.r);
@@ -300,6 +413,80 @@ function GameBoard() {
       ctx.fill();
     }
   }, []);
+
+  // ────────────────────── SHIP MOVEMENT ANIMATION ───────────────────────
+
+  const startShipAnimation = useCallback((path, unitId, cost) => {
+    if (!path || path.length < 2) return;
+
+    const SEGMENT_DURATION = 400; // ms per hex step
+    const totalDuration = (path.length - 1) * SEGMENT_DURATION;
+
+    isAnimatingRef.current = true;
+    animationRef.current = {
+      path,
+      unitId,
+      cost,
+      startTime: performance.now(),
+      totalDuration,
+      segmentDuration: SEGMENT_DURATION,
+    };
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const animateFrame = (now) => {
+      const anim = animationRef.current;
+      if (!anim) return;
+
+      const elapsed = now - anim.startTime;
+      const progress = Math.min(elapsed / anim.totalDuration, 1);
+
+      // Determine which segment we're on and local progress within it
+      const totalSegments = anim.path.length - 1;
+      const rawSegment = progress * totalSegments;
+      const segmentIndex = Math.min(Math.floor(rawSegment), totalSegments - 1);
+      const localProgress = rawSegment - segmentIndex;
+
+      // Ease in-out for smooth movement
+      const t = localProgress;
+      const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+
+      // Interpolate pixel position between hex centers
+      const fromHex = anim.path[segmentIndex];
+      const toHex = anim.path[segmentIndex + 1];
+      const fromPixel = hexToPixel(fromHex.q, fromHex.r);
+      const toPixel = hexToPixel(toHex.q, toHex.r);
+
+      const { offsetX, offsetY } = gridOffsetRef.current;
+      const interpX = fromPixel.x + (toPixel.x - fromPixel.x) * eased + offsetX;
+      const interpY = fromPixel.y + (toPixel.y - fromPixel.y) * eased + offsetY;
+
+      // Redraw the frame with the animating unit at interpolated position
+      const { width, height } = canvasSizeRef.current;
+      const gs = gameStateRef.current;
+      draw(ctx, width, height, hoveredHexRef.current, {
+        units: gs.units,
+        selectedUnit: gs.selectedUnit,
+        validMoveSet: gs.validMoveSet,
+        validTargetSet: gs.validTargetSet,
+        treasures: gs.treasures,
+      }, explosionEffect, { unitId: anim.unitId, cx: interpX, cy: interpY });
+
+      if (progress < 1) {
+        requestAnimationFrame(animateFrame);
+      } else {
+        // Animation complete — apply state change
+        const finalHex = anim.path[anim.path.length - 1];
+        game.finalizeMove(anim.unitId, finalHex.q, finalHex.r, anim.cost);
+        animationRef.current = null;
+        isAnimatingRef.current = false;
+      }
+    };
+
+    requestAnimationFrame(animateFrame);
+  }, [draw, game, explosionEffect]);
 
   // ──────────────────────────── SETUP EFFECT ────────────────────────────
 
@@ -322,6 +509,17 @@ function GameBoard() {
 
       ctx.scale(dpr, dpr);
 
+      // Resize particle overlay canvas too
+      const pCanvas = particleCanvasRef.current;
+      if (pCanvas) {
+        pCanvas.width = displayWidth * dpr;
+        pCanvas.height = displayHeight * dpr;
+        pCanvas.style.width = `${displayWidth}px`;
+        pCanvas.style.height = `${displayHeight}px`;
+        const pCtx = pCanvas.getContext('2d');
+        pCtx.scale(dpr, dpr);
+      }
+
       // Store offset for event handlers
       const centerHexX = (GRID_WIDTH - 1) / 2;
       const centerHexY = (GRID_HEIGHT - 1) / 2;
@@ -339,6 +537,7 @@ function GameBoard() {
         selectedUnit: gs.selectedUnit,
         validMoveSet: gs.validMoveSet,
         validTargetSet: gs.validTargetSet,
+        treasures: gs.treasures,
       }, explosionEffect);
     };
 
@@ -371,6 +570,9 @@ function GameBoard() {
     };
 
     const handleClick = (e) => {
+      // Block all input during ship animation
+      if (isAnimatingRef.current) return;
+
       const rect = canvas.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
@@ -408,9 +610,14 @@ function GameBoard() {
           }
         }
 
-        // 2. Check movement — clicking a valid move hex
+        // 2. Check movement — clicking a valid move hex → animate
         if (gs.validMoveSet.has(`${rounded.q},${rounded.r}`)) {
-          gs.moveUnit(rounded.q, rounded.r);
+          const moveResult = gs.moveUnit(rounded.q, rounded.r);
+          if (moveResult) {
+            // Start animation
+            const { path, unitId, cost } = moveResult;
+            startShipAnimation(path, unitId, cost);
+          }
           return;
         }
 
@@ -446,9 +653,67 @@ function GameBoard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draw]);
 
+  // ──────────────── PARTICLE ANIMATION LOOP (overlay canvas) ────────────────
+
+  useEffect(() => {
+    const pCanvas = particleCanvasRef.current;
+    if (!pCanvas) return;
+
+    const pCtx = pCanvas.getContext('2d');
+    let running = true;
+    lastFrameTimeRef.current = performance.now();
+    rippleTimerRef.current = 0;
+
+    const animate = (now) => {
+      if (!running) return;
+      const dt = Math.min((now - lastFrameTimeRef.current) / 1000, 0.1); // cap at 100ms
+      lastFrameTimeRef.current = now;
+
+      // Update particle physics
+      updateParticles(dt);
+
+      // Spawn ambient water ripples on ocean tiles periodically
+      rippleTimerRef.current += dt;
+      if (rippleTimerRef.current > 0.8) {
+        rippleTimerRef.current = 0;
+        const { offsetX, offsetY } = gridOffsetRef.current;
+        // Pick 2-3 random ocean tiles for ripples
+        for (let i = 0; i < 3; i++) {
+          const q = Math.floor(Math.random() * GRID_WIDTH);
+          const r = Math.floor(Math.random() * GRID_HEIGHT);
+          if (getTileTerrain(q, r) === 'ocean') {
+            const pixel = hexToPixel(q, r);
+            spawnWaterRipple(pixel.x + offsetX, pixel.y + offsetY);
+          }
+        }
+      }
+
+      // Clear particle canvas and draw
+      const dpr = window.devicePixelRatio || 1;
+      const w = pCanvas.width / dpr;
+      const h = pCanvas.height / dpr;
+      pCtx.save();
+      pCtx.setTransform(1, 0, 0, 1, 0, 0); // reset to clear full buffer
+      pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
+      pCtx.restore();
+
+      drawParticles(pCtx);
+
+      rafRef.current = requestAnimationFrame(animate);
+    };
+
+    rafRef.current = requestAnimationFrame(animate);
+
+    return () => {
+      running = false;
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
   // ────────────────────── REDRAW ON HOVER CHANGE ───────────────────────
 
   useEffect(() => {
+    if (isAnimatingRef.current) return; // skip during animation
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -460,6 +725,7 @@ function GameBoard() {
         selectedUnit: gs.selectedUnit,
         validMoveSet: gs.validMoveSet,
         validTargetSet: gs.validTargetSet,
+        treasures: gs.treasures,
       }, explosionEffect);
     }
   }, [draw, hoveredHex, explosionEffect]);
@@ -467,6 +733,7 @@ function GameBoard() {
   // ────────────────── REDRAW ON GAME STATE CHANGE ──────────────────────
 
   useEffect(() => {
+    if (isAnimatingRef.current) return; // skip during animation
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
@@ -477,6 +744,7 @@ function GameBoard() {
         selectedUnit: game.selectedUnit,
         validMoveSet: game.validMoveSet,
         validTargetSet: game.validTargetSet,
+        treasures: game.treasures,
       }, explosionEffect);
     }
   }, [
@@ -515,6 +783,18 @@ function GameBoard() {
           height: '100%',
         }}
       />
+      {/* Particle overlay — sits on top, pointer-events: none */}
+      <canvas
+        ref={particleCanvasRef}
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          width: '100%',
+          height: '100%',
+          pointerEvents: 'none',
+        }}
+      />
 
       {/* ── Turn Indicator (top-left) ── */}
       <div
@@ -542,6 +822,9 @@ function GameBoard() {
         </div>
         <div style={{ marginTop: 4, fontSize: 12, color: '#888' }}>
           Ships: {game.playerUnits.length}vs{game.aiUnits.length}
+        </div>
+        <div style={{ marginTop: 4, fontSize: 13, color: '#ffd700' }}>
+          💰 Treasure: {game.playerTreasures} — {game.aiTreasures} | Left: {game.treasures.length}
         </div>
       </div>
 

@@ -1,12 +1,12 @@
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useCallback, useMemo, useRef } from 'react';
 import {
   getTileTerrain,
   getHexNeighbors,
   isWithinBounds,
   isCoastalTile,
+  isNavigableTile,
   getMovementCost,
 } from './useHexGrid.js';
-
 const GRID_WIDTH = 10;
 const GRID_HEIGHT = 10;
 
@@ -94,6 +94,47 @@ function createInitialUnits() {
 }
 
 /**
+ * Find all coastal land/jungle tiles reachable by ships.
+ * These are valid treasure locations — ships can dock there.
+ */
+function findTreasureLocations() {
+  const tiles = [];
+  for (let q = 0; q < GRID_WIDTH; q++) {
+    for (let r = 0; r < GRID_HEIGHT; r++) {
+      const terrain = getTileTerrain(q, r);
+      if (terrain !== 'ocean' && isCoastalTile(q, r, GRID_WIDTH, GRID_HEIGHT)) {
+        tiles.push({ q, r });
+      }
+    }
+  }
+  return tiles;
+}
+
+/**
+ * Generate 1-3 treasures on coastal land tiles, avoiding unit spawn positions.
+ * Treasures are placed in reachable but non-trivial positions.
+ */
+function generateTreasures(unitPositions) {
+  const candidates = findTreasureLocations();
+  const occupiedSet = new Set(unitPositions.map(p => `${p.q},${p.r}`));
+  const available = candidates.filter(t => !occupiedSet.has(`${t.q},${t.r}`));
+
+  // Shuffle available tiles using Fisher-Yates
+  for (let i = available.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [available[i], available[j]] = [available[j], available[i]];
+  }
+
+  // Pick 1-3 treasures, biased toward 2-3 for meaningful gameplay
+  const count = Math.min(available.length, 1 + Math.floor(Math.random() * 3));
+  return available.slice(0, count).map((pos, i) => ({
+    id: `treasure-${i}`,
+    q: pos.q,
+    r: pos.r,
+  }));
+}
+
+/**
  * Run BFS to find all hexes reachable by a unit given its remaining movement points,
  * terrain costs, and occupancy.
  */
@@ -168,13 +209,21 @@ function getValidTargets(unit, allUnits) {
  * Create the initial game state.
  */
 function createInitialGameState() {
+  const units = createInitialUnits();
+  // Get unit spawn positions so we don't place treasures on them
+  const unitPositions = units.map(u => ({ q: u.q, r: u.r }));
+  const treasures = generateTreasures(unitPositions);
+
   return {
     currentTurn: 1,
     gamePhase: 'playerTurn', // 'playerTurn' | 'aiTurn' | 'gameOver'
-    units: createInitialUnits(),
+    units,
     selectedUnitId: null,
     winner: null, // 'player' | 'ai' | null
     lastAttack: null, // { q, r, timestamp } — for explosion effect
+    treasures,         // active treasures on the map
+    playerTreasures: 0, // treasures collected by player
+    aiTreasures: 0,     // treasures collected by AI
   };
 }
 
@@ -184,7 +233,11 @@ function createInitialGameState() {
 export function useGameState() {
   const [gameState, setGameState] = useState(createInitialGameState);
 
-  const { units, selectedUnitId, currentTurn, gamePhase, winner, lastAttack } = gameState;
+  // Ref for reading current state inside callbacks without re-renders
+  const gameStateRef = useRef(gameState);
+  gameStateRef.current = gameState;
+
+  const { units, selectedUnitId, currentTurn, gamePhase, winner, lastAttack, treasures, playerTreasures, aiTreasures } = gameState;
 
   // Derived: the currently selected unit object
   const selectedUnit = useMemo(
@@ -270,26 +323,87 @@ export function useGameState() {
   }, []);
 
   /**
-   * Move the selected unit to a target hex, if valid.
+   * Validate and compute BFS path for moving the selected unit to (targetQ, targetR).
+   * Returns { path: [{q,r}...], unitId, cost } or null if invalid.
+   * Does NOT update game state — call finalizeMove after animation completes.
    */
   const moveUnit = useCallback((targetQ, targetR) => {
+    const prev = gameStateRef.current;
+    if (prev.gamePhase !== 'playerTurn' || !prev.selectedUnitId) return null;
+    const unit = prev.units.find(u => u.id === prev.selectedUnitId);
+    if (!unit || unit.movementPoints <= 0 || unit.hp <= 0) return null;
+
+    const moves = bfsValidMoves(unit, prev.units);
+    const canMove = moves.some(m => m.q === targetQ && m.r === targetR);
+    if (!canMove) return null;
+
+    // Build occupied set (excluding the moving unit itself)
+    const occupied = new Set();
+    prev.units.forEach(u => {
+      if (u.id !== unit.id && u.hp > 0) {
+        occupied.add(`${u.q},${u.r}`);
+      }
+    });
+
+    // Compute BFS path
+    const path = bfsPathTo(
+      unit.q, unit.r, targetQ, targetR,
+      unit.movementPoints, occupied, GRID_WIDTH, GRID_HEIGHT
+    );
+    if (!path || path.length < 2) return null;
+
+    // Calculate total cost along the path
+    let totalCost = 0;
+    for (let i = 1; i < path.length; i++) {
+      const terrain = getTileTerrain(path[i].q, path[i].r);
+      totalCost += getMovementCost(terrain);
+    }
+
+    return { path, unitId: unit.id, cost: totalCost };
+  }, []);
+
+  /**
+   * Apply the final position update after movement animation completes.
+   * Moves unit to (targetQ, targetR), deducts movement points, and collects any treasure.
+   */
+  const finalizeMove = useCallback((unitId, targetQ, targetR, cost) => {
     setGameState(prev => {
-      if (prev.gamePhase !== 'playerTurn' || !prev.selectedUnitId) return prev;
-      const unit = prev.units.find(u => u.id === prev.selectedUnitId);
-      if (!unit || unit.movementPoints <= 0 || unit.hp <= 0) return prev;
+      const unit = prev.units.find(u => u.id === unitId);
+      const owner = unit ? unit.owner : null;
 
-      const moves = bfsValidMoves(unit, prev.units);
-      const canMove = moves.some(m => m.q === targetQ && m.r === targetR);
-      if (!canMove) return prev;
+      // Check for treasure collection at destination
+      const treasureHere = prev.treasures.find(t => t.q === targetQ && t.r === targetR);
+      let newTreasures = prev.treasures;
+      let newPlayerTreasures = prev.playerTreasures;
+      let newAiTreasures = prev.aiTreasures;
+      let newGamePhase = prev.gamePhase;
+      let newWinner = prev.winner;
 
-      // Calculate the cost of the actual path taken (BFS shortest path)
-      const terrain = getTileTerrain(targetQ, targetR);
-      const cost = getMovementCost(terrain);
+      if (treasureHere && owner) {
+        newTreasures = prev.treasures.filter(t => t.id !== treasureHere.id);
+        if (owner === 'player') {
+          newPlayerTreasures = prev.playerTreasures + 1;
+        } else {
+          newAiTreasures = prev.aiTreasures + 1;
+        }
+
+        // Treasure victory: collecting all treasures wins immediately
+        if (newTreasures.length === 0) {
+          newGamePhase = 'gameOver';
+          newWinner = newPlayerTreasures > newAiTreasures ? 'player' : 'ai';
+        }
+      }
 
       return {
         ...prev,
+        selectedUnitId: null,
+        treasures: newTreasures,
+        playerTreasures: newPlayerTreasures,
+        aiTreasures: newAiTreasures,
+        gamePhase: newGamePhase,
+        winner: newWinner,
         units: prev.units.map(u => {
-          if (u.id === unit.id) {
+          if (u.id === unitId) {
             return {
               ...u,
               q: targetQ,
@@ -395,6 +509,12 @@ export function useGameState() {
 
       let aiLastAttack = null;
 
+      // Track AI treasure collection during movement
+      let aiCollectedTreasures = [];
+      let currentTreasures = [...prev.treasures];
+      let currentAiTreasures = prev.aiTreasures;
+      let currentPlayerTreasures = prev.playerTreasures;
+
       // AI logic: for each AI unit, try to move toward and attack the nearest player unit
       const aiUnitIds = updatedUnits
         .filter(u => u.owner === 'ai' && u.hp > 0)
@@ -414,6 +534,9 @@ export function useGameState() {
             gamePhase: 'gameOver',
             winner: 'ai',
             lastAttack: aiLastAttack,
+            treasures: currentTreasures,
+            playerTreasures: currentPlayerTreasures,
+            aiTreasures: currentAiTreasures,
           };
         }
 
@@ -496,6 +619,15 @@ export function useGameState() {
               }
               return u;
             });
+
+            // Check if AI unit collected a treasure at its new position
+            const treasureAtDest = currentTreasures.find(
+              t => t.q === bestMove.q && t.r === bestMove.r
+            );
+            if (treasureAtDest) {
+              currentTreasures = currentTreasures.filter(t => t.id !== treasureAtDest.id);
+              currentAiTreasures++;
+            }
           }
         }
       }
@@ -512,6 +644,24 @@ export function useGameState() {
           winner: 'ai',
           selectedUnitId: null,
           lastAttack: aiLastAttack,
+          treasures: currentTreasures,
+          playerTreasures: currentPlayerTreasures,
+          aiTreasures: currentAiTreasures,
+        };
+      }
+
+      // Check treasure victory after AI turn
+      if (currentTreasures.length === 0) {
+        return {
+          ...prev,
+          units: updatedUnits,
+          gamePhase: 'gameOver',
+          winner: currentPlayerTreasures > currentAiTreasures ? 'player' : 'ai',
+          selectedUnitId: null,
+          lastAttack: aiLastAttack,
+          treasures: currentTreasures,
+          playerTreasures: currentPlayerTreasures,
+          aiTreasures: currentAiTreasures,
         };
       }
 
@@ -523,6 +673,9 @@ export function useGameState() {
         currentTurn: prev.currentTurn + 1,
         gamePhase: 'playerTurn',
         lastAttack: aiLastAttack,
+        treasures: currentTreasures,
+        playerTreasures: currentPlayerTreasures,
+        aiTreasures: currentAiTreasures,
       };
     });
   }, []);
@@ -542,11 +695,15 @@ export function useGameState() {
     playerUnits,
     aiUnits,
     lastAttack,
+    treasures,
+    playerTreasures,
+    aiTreasures,
 
     // Actions
     selectUnit,
     deselectUnit,
     moveUnit,
+    finalizeMove,
     attackUnit,
     endTurn,
     executeAiTurn,

@@ -15,12 +15,12 @@ Versione corrente: 0.2.0 — Asset Integration + Grid Fixes
 - [x] Esplosione effetto combattimento
 - [x] Icone UI (cuore HP, stivale movimento, cannoni attacco)
 - [x] Colori terreno intuitivi (blu oceano, verde giungla, marrone terra)
+- [x] **Animazione movimento navi** — interpolazione con easing, BFS path, blocco input
+- [x] **Effetti particellari** — sistema pooled (300 particelle), wake navi, esplosioni, increspature acqua
+- [x] **Sistema obiettivi (Caccia al tesoro)** — 1-3 tesori su costa, raccolta, vittoria tesori
+- [x] **Sprite baule tesoro** con bagliore pulsante
 
-### In corso 🚧
-- [ ] Animazione movimento navi (lerp/interpolazione)
-- [ ] Effetti particellari acqua / onde
-- [ ] Generazione procedurale isole più organica
-- [ ] Sistema obiettivi (caccia al tesoro, conquista)
+Nessun task in corso al momento. Prossimi step: Fase 3 (animazioni UI/menu), Fase 4 (mappe organiche), Fase 5 (game design avanzato).
 
 ### Asset
 Tutte le sprite in `src/assets/`, generate con NanoBanana 2 su Google AI Studio

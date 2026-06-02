@@ -148,4 +148,70 @@ export function getMovementCost(terrain) {
   }
 }
 
+/**
+ * BFS pathfinding: find the shortest path from (startQ, startR) to (targetQ, targetR).
+ * Returns an array of {q, r} hexes from start to target (inclusive), or null if unreachable.
+ * @param {number} startQ
+ * @param {number} startR
+ * @param {number} targetQ
+ * @param {number} targetR
+ * @param {number} maxCost - maximum movement budget
+ * @param {Set<string>} occupied - occupied hex keys (blocked)
+ * @param {number} gridW
+ * @param {number} gridH
+ */
+export function bfsPathTo(startQ, startR, targetQ, targetR, maxCost, occupied, gridW = 10, gridH = 10) {
+  const key = (q, r) => `${q},${r}`;
+  const startKey = key(startQ, startR);
+  const targetKey = key(targetQ, targetR);
+
+  if (startKey === targetKey) return [{ q: startQ, r: startR }];
+
+  const visited = new Map(); // key -> { parent: key, q, r, cost }
+  visited.set(startKey, { parent: null, q: startQ, r: startR, cost: 0 });
+  const queue = [{ q: startQ, r: startR }];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const currentKey = key(current.q, current.r);
+    const currentEntry = visited.get(currentKey);
+
+    const neighbors = getHexNeighbors(current.q, current.r);
+    for (const n of neighbors) {
+      const nKey = key(n.q, n.r);
+      if (visited.has(nKey)) continue;
+      if (!isWithinBounds(n.q, n.r, gridW, gridH)) continue;
+      if (occupied.has(nKey) && nKey !== targetKey) continue;
+
+      const terrain = getTileTerrain(n.q, n.r);
+      const navigable =
+        terrain === 'ocean' ||
+        (terrain === 'land' && isCoastalTile(n.q, n.r, gridW, gridH));
+      if (!navigable) continue;
+
+      const cost = getMovementCost(terrain);
+      const totalCost = currentEntry.cost + cost;
+      if (totalCost > maxCost) continue;
+
+      visited.set(nKey, { parent: currentKey, q: n.q, r: n.r, cost: totalCost });
+
+      if (nKey === targetKey) {
+        // Reconstruct path
+        const path = [];
+        let cursor = targetKey;
+        while (cursor !== null) {
+          const entry = visited.get(cursor);
+          path.unshift({ q: entry.q, r: entry.r });
+          cursor = entry.parent;
+        }
+        return path;
+      }
+
+      queue.push({ q: n.q, r: n.r });
+    }
+  }
+
+  return null; // unreachable
+}
+
 export { HEX_RADIUS };
