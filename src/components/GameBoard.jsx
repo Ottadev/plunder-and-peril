@@ -7,6 +7,8 @@ import {
   hexCorner,
   getTileTerrain,
   getTerrainColor,
+  getTerrainSymbol,
+  TERRAIN,
 } from '../hooks/useHexGrid.js';
 import { useGameState, UNIT_TYPES } from '../hooks/useGameState.js';
 import {
@@ -214,6 +216,48 @@ function GameBoard() {
         ctx.strokeStyle = 'rgba(255,255,255,0.12)';
         ctx.lineWidth = 1.5;
         ctx.stroke();
+
+        // ── Terrain symbols (port anchor, reef marks, deep-ocean pattern) ──
+        const symbol = getTerrainSymbol(terrain);
+        if (symbol) {
+          ctx.save();
+          ctx.font = `${Math.round(HEX_RADIUS * 0.55)}px serif`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          if (terrain === TERRAIN.REEF) {
+            ctx.fillStyle = 'rgba(200, 180, 100, 0.5)';
+          } else if (terrain === TERRAIN.PORT) {
+            ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
+            // Golden glow for ports
+            ctx.shadowColor = '#ffd700';
+            ctx.shadowBlur = 8;
+          } else {
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+          }
+          ctx.fillText(symbol, cx, cy);
+          ctx.restore();
+        }
+
+        // Deep ocean subtle wave lines
+        if (terrain === TERRAIN.DEEP_OCEAN) {
+          ctx.save();
+          const waveSeed = (q * 17 + r * 31) % 100;
+          ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+          ctx.lineWidth = 1;
+          for (let i = 0; i < 2; i++) {
+            const wy = cy - HEX_RADIUS * 0.3 + i * HEX_RADIUS * 0.4;
+            ctx.beginPath();
+            ctx.moveTo(cx - HEX_RADIUS * 0.6, wy);
+            ctx.quadraticCurveTo(
+              cx + Math.sin(waveSeed + i * 2) * HEX_RADIUS * 0.2,
+              wy - HEX_RADIUS * 0.15,
+              cx + HEX_RADIUS * 0.6,
+              wy,
+            );
+            ctx.stroke();
+          }
+          ctx.restore();
+        }
 
         // ── Highlights over tiles ──
         if (state) {

@@ -6,7 +6,13 @@ Versione corrente: 0.2.0 — Asset Integration + Grid Fixes
 ### Completato ✅
 - [x] Progetto Vite/React con Canvas rendering
 - [x] Sistema coordinate assiali (pixel → hex corretto, tiling perfetto)
-- [x] Griglia 10×10 con 3 biomi (55% oceano, 20% giungla, 25% terra)
+- [x] **Mappe organiche con cellular automata** — isole con forme naturali, non più rumore random
+- [x] **8 tipi terreno** — deep_ocean, ocean, shallow, reef, sand, land, jungle, port
+- [x] **Oceano profondo** — zone scure lontane dalla costa
+- [x] **Scogliere/barriere** — reef come ostacoli non navigabili
+- [x] **Porti neutrali** — 2-3 punti di interesse con ancora dorata
+- [x] **Spiagge (sand)** — costa sabbiosa dove le navi possono attraccare
+- [x] Generazione deterministica (seme 42) con mappe riproducibili
 - [x] 3 tipi nave: Sloop, Brigantino, Galeone
 - [x] Movimento BFS con costi terreno (solo oceano e costa)
 - [x] Combattimento base + turno AI

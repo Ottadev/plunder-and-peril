@@ -6,6 +6,8 @@ import {
   isCoastalTile,
   isNavigableTile,
   getMovementCost,
+  setMap,
+  TERRAIN,
 } from './useHexGrid.js';
 const GRID_WIDTH = 10;
 const GRID_HEIGHT = 10;
@@ -40,13 +42,14 @@ function createUnit(type, owner, q, r) {
 }
 
 /**
- * Find all ocean tiles within a given column range.
+ * Find all navigable spawn tiles (ocean or shallow) within a given column range.
  */
 function findOceanTilesInColumns(minQ, maxQ) {
   const tiles = [];
   for (let q = minQ; q <= maxQ; q++) {
     for (let r = 0; r < GRID_HEIGHT; r++) {
-      if (getTileTerrain(q, r) === 'ocean') {
+      const terrain = getTileTerrain(q, r);
+      if (terrain === TERRAIN.OCEAN || terrain === TERRAIN.SHALLOW) {
         tiles.push({ q, r });
       }
     }
@@ -102,7 +105,10 @@ function findTreasureLocations() {
   for (let q = 0; q < GRID_WIDTH; q++) {
     for (let r = 0; r < GRID_HEIGHT; r++) {
       const terrain = getTileTerrain(q, r);
-      if (terrain !== 'ocean' && isCoastalTile(q, r, GRID_WIDTH, GRID_HEIGHT)) {
+      // Treasures on land tiles that are coastal (accessible by ships)
+      if (terrain !== TERRAIN.OCEAN && terrain !== TERRAIN.SHALLOW &&
+          terrain !== TERRAIN.DEEP_OCEAN && terrain !== TERRAIN.REEF &&
+          isCoastalTile(q, r, GRID_WIDTH, GRID_HEIGHT)) {
         tiles.push({ q, r });
       }
     }
@@ -209,6 +215,8 @@ function getValidTargets(unit, allUnits) {
  * Create the initial game state.
  */
 function createInitialGameState() {
+  // Generate the map with an initial seed
+  setMap(42, GRID_WIDTH, GRID_HEIGHT);
   const units = createInitialUnits();
   // Get unit spawn positions so we don't place treasures on them
   const unitPositions = units.map(u => ({ q: u.q, r: u.r }));
