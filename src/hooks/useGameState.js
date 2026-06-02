@@ -224,7 +224,7 @@ function createInitialGameState() {
 
   return {
     currentTurn: 1,
-    gamePhase: 'playerTurn', // 'playerTurn' | 'aiTurn' | 'gameOver'
+    gamePhase: 'playerTurn', // 'playerTurn' | 'aiTurn' | 'upgradePhase' | 'gameOver'
     units,
     selectedUnitId: null,
     winner: null, // 'player' | 'ai' | null
@@ -232,6 +232,8 @@ function createInitialGameState() {
     treasures,         // active treasures on the map
     playerTreasures: 0, // treasures collected by player
     aiTreasures: 0,     // treasures collected by AI
+    upgradeBonuses: { hp: 0, movement: 0, attack: 0 },
+    lastUpgradeTurn: 0,
   };
 }
 
@@ -245,7 +247,7 @@ export function useGameState() {
   const gameStateRef = useRef(gameState);
   gameStateRef.current = gameState;
 
-  const { units, selectedUnitId, currentTurn, gamePhase, winner, lastAttack, treasures, playerTreasures, aiTreasures } = gameState;
+  const { units, selectedUnitId, currentTurn, gamePhase, winner, lastAttack, treasures, playerTreasures, aiTreasures, upgradeBonuses } = gameState;
 
   // Derived: the currently selected unit object
   const selectedUnit = useMemo(
@@ -673,17 +675,57 @@ export function useGameState() {
         };
       }
 
-      // Switch back to player turn
+      // Switch back to player turn (or upgrade phase every 3 turns)
+      const nextTurn = prev.currentTurn + 1;
+      const needsUpgrade = nextTurn % 3 === 0 && nextTurn > 0;
       return {
         ...prev,
         units: updatedUnits,
         selectedUnitId: null,
-        currentTurn: prev.currentTurn + 1,
-        gamePhase: 'playerTurn',
+        currentTurn: nextTurn,
+        gamePhase: needsUpgrade ? 'upgradePhase' : 'playerTurn',
         lastAttack: aiLastAttack,
         treasures: currentTreasures,
         playerTreasures: currentPlayerTreasures,
         aiTreasures: currentAiTreasures,
+      };
+    });
+  }, []);
+
+  /**
+   * Apply a ship upgrade to all player units.
+   * Called during upgradePhase (every 3 turns).
+   * @param {'hp'|'movement'|'attack'} type
+   */
+  const applyUpgrade = useCallback((type) => {
+    setGameState(prev => {
+      if (prev.gamePhase !== 'upgradePhase') return prev;
+
+      const bonus = { ...prev.upgradeBonuses, [type]: (prev.upgradeBonuses[type] || 0) + 1 };
+
+      const upgradedUnits = prev.units.map(u => {
+        if (u.owner !== 'player') return u;
+        const nu = { ...u };
+        if (type === 'hp') {
+          nu.maxHp += 1;
+          nu.hp = Math.min(nu.hp + 1, nu.maxHp);
+        }
+        if (type === 'movement') {
+          nu.maxMovement += 1;
+          nu.movementPoints = Math.min(nu.movementPoints + 1, nu.maxMovement);
+        }
+        if (type === 'attack') {
+          nu.attack += 1;
+        }
+        return nu;
+      });
+
+      return {
+        ...prev,
+        units: upgradedUnits,
+        upgradeBonuses: bonus,
+        lastUpgradeTurn: prev.currentTurn,
+        gamePhase: 'playerTurn',
       };
     });
   }, []);
@@ -706,6 +748,7 @@ export function useGameState() {
     treasures,
     playerTreasures,
     aiTreasures,
+    upgradeBonuses,
 
     // Actions
     selectUnit,
@@ -716,5 +759,6 @@ export function useGameState() {
     endTurn,
     executeAiTurn,
     refreshTurn,
+    applyUpgrade,
   };
 }

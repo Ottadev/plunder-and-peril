@@ -931,6 +931,13 @@ function GameBoard() {
         <div style={{ marginTop: 4, fontSize: 13, color: '#ffd700' }}>
           💰 Treasure: {game.playerTreasures} — {game.aiTreasures} | Left: {game.treasures.length}
         </div>
+        {(game.upgradeBonuses.hp > 0 || game.upgradeBonuses.movement > 0 || game.upgradeBonuses.attack > 0) && (
+          <div style={{ marginTop: 4, fontSize: 11, color: '#88ddff', display: 'flex', gap: 8 }}>
+            {game.upgradeBonuses.hp > 0 && <span>❤️+{game.upgradeBonuses.hp}</span>}
+            {game.upgradeBonuses.movement > 0 && <span>👢+{game.upgradeBonuses.movement}</span>}
+            {game.upgradeBonuses.attack > 0 && <span>⚔️+{game.upgradeBonuses.attack}</span>}
+          </div>
+        )}
       </div>
 
       {/* ── End Turn Button (top-right) ── */}
@@ -1057,6 +1064,108 @@ function GameBoard() {
             <span style={{ color: hoveredUnit.attacked ? '#666' : '#ff8888' }}>
               🔫 {hoveredUnit.attack}
             </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Upgrade Phase Overlay (every 3 turns) ── */}
+      {game.gamePhase === 'upgradePhase' && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.75)',
+            zIndex: 10,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 28,
+              fontWeight: 'bold',
+              fontFamily: 'Georgia, serif',
+              color: '#f0c040',
+              textShadow: '0 0 20px rgba(255, 215, 0, 0.4)',
+              marginBottom: 8,
+            }}
+          >
+            ⬆️ Ship Upgrade!
+          </div>
+          <div style={{ color: '#aaa', fontSize: 14, marginBottom: 24, fontFamily: 'Georgia, serif' }}>
+            Turn {game.currentTurn} — choose a bonus for your entire fleet
+          </div>
+          <div style={{ display: 'flex', gap: 16 }}>
+            {/* HP upgrade */}
+            <div
+              onClick={() => game.applyUpgrade('hp')}
+              style={{
+                background: 'rgba(20, 40, 20, 0.9)',
+                border: '2px solid #44cc44',
+                borderRadius: 12,
+                padding: '20px 28px',
+                cursor: 'pointer',
+                textAlign: 'center',
+                minWidth: 130,
+                transition: 'transform 0.2s, border-color 0.2s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.05)'; e.currentTarget.style.borderColor = '#66ee66'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.borderColor = '#44cc44'; }}
+            >
+              <div style={{ fontSize: 36, marginBottom: 8 }}>❤️</div>
+              <div style={{ color: '#44cc44', fontSize: 20, fontWeight: 'bold', fontFamily: 'Georgia, serif' }}>+1 HP</div>
+              <div style={{ color: '#888', fontSize: 12, marginTop: 6, fontFamily: 'sans-serif' }}>
+                Max HP +1<br/>Heal 1 HP
+              </div>
+            </div>
+
+            {/* Movement upgrade */}
+            <div
+              onClick={() => game.applyUpgrade('movement')}
+              style={{
+                background: 'rgba(20, 40, 60, 0.9)',
+                border: '2px solid #4488ff',
+                borderRadius: 12,
+                padding: '20px 28px',
+                cursor: 'pointer',
+                textAlign: 'center',
+                minWidth: 130,
+                transition: 'transform 0.2s, border-color 0.2s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.05)'; e.currentTarget.style.borderColor = '#66aaff'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.borderColor = '#4488ff'; }}
+            >
+              <div style={{ fontSize: 36, marginBottom: 8 }}>👢</div>
+              <div style={{ color: '#4488ff', fontSize: 20, fontWeight: 'bold', fontFamily: 'Georgia, serif' }}>+1 Move</div>
+              <div style={{ color: '#888', fontSize: 12, marginTop: 6, fontFamily: 'sans-serif' }}>
+                Movement +1<br/>All ships faster
+              </div>
+            </div>
+
+            {/* Attack upgrade */}
+            <div
+              onClick={() => game.applyUpgrade('attack')}
+              style={{
+                background: 'rgba(60, 20, 20, 0.9)',
+                border: '2px solid #ff4444',
+                borderRadius: 12,
+                padding: '20px 28px',
+                cursor: 'pointer',
+                textAlign: 'center',
+                minWidth: 130,
+                transition: 'transform 0.2s, border-color 0.2s',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.05)'; e.currentTarget.style.borderColor = '#ff6666'; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; e.currentTarget.style.borderColor = '#ff4444'; }}
+            >
+              <div style={{ fontSize: 36, marginBottom: 8 }}>⚔️</div>
+              <div style={{ color: '#ff4444', fontSize: 20, fontWeight: 'bold', fontFamily: 'Georgia, serif' }}>+1 ATK</div>
+              <div style={{ color: '#888', fontSize: 12, marginTop: 6, fontFamily: 'sans-serif' }}>
+                Attack +1<br/>Deal more damage
+              </div>
+            </div>
           </div>
         </div>
       )}
