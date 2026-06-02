@@ -24,28 +24,32 @@ import {
 import sloopUrl from '../assets/sloop.jpg';
 import brigantineUrl from '../assets/brigantine2.jpg';
 import galleonUrl from '../assets/galleon.jpg';
-import oceanUrl from '../assets/ocean.jpg';
-import landUrl from '../assets/land.jpg';
-import jungleUrl from '../assets/jungle.jpg';
 import heartUrl from '../assets/heart.jpg';
 import bootUrl from '../assets/boot.jpg';
 import crosscannonUrl from '../assets/crosscannon.jpg';
 import explosionUrl from '../assets/explosion.jpg';
 import treasurechestUrl from '../assets/treasurechest.jpg';
+import portIconUrl from '../assets/port_icon.png';
+import reefUrl from '../assets/reef.png';
+import pennantPlayerUrl from '../assets/pennant_player.png';
+import pennantAiUrl from '../assets/pennant_ai.png';
+import woodButtonUrl from '../assets/wood_button.png';
 
 // Convert Vite URL strings to HTMLImageElements for ctx.drawImage()
 function makeImg(url) { const i = new Image(); i.src = url; return i; }
 const sloopImg = makeImg(sloopUrl);
 const brigantineImg = makeImg(brigantineUrl);
 const galleonImg = makeImg(galleonUrl);
-const oceanImg = makeImg(oceanUrl);
-const landImg = makeImg(landUrl);
-const jungleImg = makeImg(jungleUrl);
 const heartImg = makeImg(heartUrl);
 const bootImg = makeImg(bootUrl);
 const crosscannonImg = makeImg(crosscannonUrl);
 const explosionImg = makeImg(explosionUrl);
 const treasurechestImg = makeImg(treasurechestUrl);
+const portIconImg = makeImg(portIconUrl);
+const reefImg = makeImg(reefUrl);
+const pennantPlayerImg = makeImg(pennantPlayerUrl);
+const pennantAiImg = makeImg(pennantAiUrl);
+const woodButtonImg = makeImg(woodButtonUrl);
 
 const GRID_WIDTH = 10;
 const GRID_HEIGHT = 10;
@@ -219,25 +223,32 @@ function GameBoard() {
         ctx.lineWidth = 1.5;
         ctx.stroke();
 
-        // ── Terrain symbols (port anchor, reef marks, deep-ocean pattern) ──
-        const symbol = getTerrainSymbol(terrain);
-        if (symbol) {
+        // ── Terrain images (port, reef) and deep-ocean pattern ──
+        if (terrain === TERRAIN.PORT && portIconImg && portIconImg.complete && portIconImg.naturalWidth > 0) {
+          const iconSize = HEX_RADIUS * 0.7;
           ctx.save();
-          ctx.font = `${Math.round(HEX_RADIUS * 0.55)}px serif`;
-          ctx.textAlign = 'center';
-          ctx.textBaseline = 'middle';
-          if (terrain === TERRAIN.REEF) {
-            ctx.fillStyle = 'rgba(200, 180, 100, 0.5)';
-          } else if (terrain === TERRAIN.PORT) {
-            ctx.fillStyle = 'rgba(255, 215, 0, 0.8)';
-            // Golden glow for ports
-            ctx.shadowColor = '#ffd700';
-            ctx.shadowBlur = 8;
-          } else {
-            ctx.fillStyle = 'rgba(255,255,255,0.15)';
-          }
-          ctx.fillText(symbol, cx, cy);
+          ctx.shadowColor = '#ffd700';
+          ctx.shadowBlur = 12;
+          ctx.drawImage(portIconImg, cx - iconSize, cy - iconSize, iconSize * 2, iconSize * 2);
           ctx.restore();
+        } else if (terrain === TERRAIN.REEF && reefImg && reefImg.complete && reefImg.naturalWidth > 0) {
+          const iconSize = HEX_RADIUS * 0.6;
+          ctx.save();
+          ctx.globalAlpha = 0.8;
+          ctx.drawImage(reefImg, cx - iconSize, cy - iconSize, iconSize * 2, iconSize * 2);
+          ctx.restore();
+        } else {
+          // Fallback text symbol for other terrain types
+          const symbol = getTerrainSymbol(terrain);
+          if (symbol) {
+            ctx.save();
+            ctx.font = `${Math.round(HEX_RADIUS * 0.55)}px serif`;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = 'rgba(255,255,255,0.15)';
+            ctx.fillText(symbol, cx, cy);
+            ctx.restore();
+          }
         }
 
         // Deep ocean subtle wave lines
@@ -393,6 +404,15 @@ function GameBoard() {
         ctx.strokeStyle = '#666666';
         ctx.lineWidth = 0.8;
         ctx.strokeRect(barX, barY, barWidth, barHeight);
+
+        // Team pennant flag above ship
+        const pennantImg = isPlayer ? pennantPlayerImg : pennantAiImg;
+        if (pennantImg && pennantImg.complete && pennantImg.naturalWidth > 0) {
+          const pennantSize = HEX_RADIUS * 0.4;
+          const pennantX = cx - pennantSize;
+          const pennantY = cy - spriteSize - pennantSize * 0.5;
+          ctx.drawImage(pennantImg, pennantX, pennantY, pennantSize * 2, pennantSize);
+        }
       }
     }
 
@@ -921,22 +941,40 @@ function GameBoard() {
             position: 'absolute',
             top: 16,
             right: 16,
-            background: 'linear-gradient(135deg, #2a1a0a, #3a2a1a)',
-            border: '2px solid #8a7a5a',
-            borderRadius: 8,
-            padding: '10px 22px',
-            color: '#f0d080',
+            background: 'transparent',
+            border: 'none',
+            padding: 0,
+            cursor: 'pointer',
             fontFamily: 'Georgia, serif',
             fontSize: 16,
             fontWeight: 'bold',
-            cursor: 'pointer',
+            color: '#f0d080',
             letterSpacing: 1,
-            transition: 'all 0.2s',
+            width: 130,
+            height: 38,
+            overflow: 'hidden',
+            transition: 'filter 0.2s',
           }}
-          onMouseEnter={e => { e.target.style.borderColor = '#c0a060'; e.target.style.background = 'linear-gradient(135deg, #3a2a1a, #4a3a2a)'; }}
-          onMouseLeave={e => { e.target.style.borderColor = '#8a7a5a'; e.target.style.background = 'linear-gradient(135deg, #2a1a0a, #3a2a1a)'; }}
+          onMouseEnter={e => { e.currentTarget.style.filter = 'brightness(1.2)'; }}
+          onMouseLeave={e => { e.currentTarget.style.filter = 'brightness(1)'; }}
         >
-          ⚓ End Turn
+          {woodButtonImg && woodButtonImg.complete && woodButtonImg.naturalWidth > 0 ? (
+            <img
+              src={woodButtonUrl}
+              alt=""
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+            />
+          ) : (
+            <div style={{
+              position: 'absolute', inset: 0,
+              background: 'linear-gradient(135deg, #2a1a0a, #3a2a1a)',
+              border: '2px solid #8a7a5a',
+              borderRadius: 8,
+            }} />
+          )}
+          <span style={{ position: 'relative', zIndex: 1, textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
+            ⚓ End Turn
+          </span>
         </button>
       )}
 
