@@ -68,6 +68,8 @@ function GameBoard() {
   const canvasRef = useRef(null);
   const particleCanvasRef = useRef(null);
   const [hoveredHex, setHoveredHex] = useState(null);
+  const [hoveredUnit, setHoveredUnit] = useState(null);
+  const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const lastHoveredHexRef = useRef(null);
   const gridOffsetRef = useRef({ offsetX: 0, offsetY: 0 });
   const canvasSizeRef = useRef({ width: 0, height: 0 });
@@ -589,6 +591,7 @@ function GameBoard() {
       const rect = canvas.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
+      setMousePos({ x: e.clientX, y: e.clientY });
 
       const { offsetX, offsetY } = gridOffsetRef.current;
       const hexCoords = pixelToHex(px - offsetX, py - offsetY);
@@ -605,11 +608,18 @@ function GameBoard() {
           lastHoveredHexRef.current = rounded;
           setHoveredHex(rounded);
         }
+        // Check if a unit exists at this hex
+        const gs = gameStateRef.current;
+        const unitAtHex = gs.units.find(
+          u => u.q === rounded.q && u.r === rounded.r && u.hp > 0,
+        );
+        setHoveredUnit(unitAtHex ?? null);
       } else {
         if (lastHoveredHexRef.current !== null) {
           lastHoveredHexRef.current = null;
           setHoveredHex(null);
         }
+        setHoveredUnit(null);
       }
     };
 
@@ -721,16 +731,47 @@ function GameBoard() {
       if (rippleTimerRef.current > 0.8) {
         rippleTimerRef.current = 0;
         const { offsetX, offsetY } = gridOffsetRef.current;
-        // Pick 2-3 random ocean tiles for ripples
+        // Pick 2-3 random water tiles for ripples
         for (let i = 0; i < 3; i++) {
           const q = Math.floor(Math.random() * GRID_WIDTH);
           const r = Math.floor(Math.random() * GRID_HEIGHT);
-          if (getTileTerrain(q, r) === 'ocean') {
+          const terrain = getTileTerrain(q, r);
+          if (terrain === TERRAIN.OCEAN || terrain === TERRAIN.SHALLOW) {
             const pixel = hexToPixel(q, r);
             spawnWaterRipple(pixel.x + offsetX, pixel.y + offsetY);
           }
         }
       }
+
+      // ── Water shimmer — animated wave highlights on ocean tiles ──
+      const waveTime = now * 0.001;
+      const { offsetX, offsetY } = gridOffsetRef.current;
+      pCtx.save();
+      for (let q = 0; q < GRID_WIDTH; q++) {
+        for (let r = 0; r < GRID_HEIGHT; r++) {
+          const terrain = getTileTerrain(q, r);
+          if (terrain === TERRAIN.OCEAN || terrain === TERRAIN.SHALLOW || terrain === TERRAIN.DEEP_OCEAN) {
+            const { x, y } = hexToPixel(q, r);
+            const cx = x + offsetX;
+            const cy = y + offsetY;
+
+            // Subtle shimmer line that drifts across the tile
+            const shimmerOffset = Math.sin(waveTime * 1.2 + q * 0.7 + r * 1.1) * HEX_RADIUS * 0.5;
+            const opacity = 0.04 + 0.03 * Math.sin(waveTime * 0.8 + q * 1.3 + r * 0.9);
+
+            pCtx.strokeStyle = `rgba(180, 220, 255, ${opacity})`;
+            pCtx.lineWidth = 1.5;
+            pCtx.beginPath();
+            pCtx.moveTo(cx - HEX_RADIUS * 0.7, cy + shimmerOffset);
+            pCtx.quadraticCurveTo(
+              cx, cy + shimmerOffset - HEX_RADIUS * 0.15,
+              cx + HEX_RADIUS * 0.7, cy + shimmerOffset,
+            );
+            pCtx.stroke();
+          }
+        }
+      }
+      pCtx.restore();
 
       // Clear particle canvas and draw
       const dpr = window.devicePixelRatio || 1;
@@ -939,6 +980,44 @@ function GameBoard() {
               <span style={{ color: selectedUnitInfo.attacked ? '#666' : '#ff8888' }}>
                 {selectedUnitInfo.attack}
               </span>
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* ── Unit Tooltip (hover) ── */}
+      {hoveredUnit && !selectedUnitInfo && (
+        <div
+          style={{
+            position: 'fixed',
+            left: mousePos.x + 16,
+            top: mousePos.y - 10,
+            background: 'rgba(10, 10, 30, 0.92)',
+            border: '1px solid rgba(255,215,0,0.4)',
+            borderRadius: 8,
+            padding: '8px 14px',
+            color: '#d4d4e8',
+            fontFamily: 'Georgia, serif',
+            fontSize: 13,
+            pointerEvents: 'none',
+            zIndex: 20,
+            minWidth: 140,
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          <div style={{ fontWeight: 'bold', color: '#f0c040', marginBottom: 4, fontSize: 14 }}>
+            {hoveredUnit.owner === 'player' ? '⛵' : '☠️'}{' '}
+            {UNIT_TYPES[hoveredUnit.type]?.label || hoveredUnit.type}
+          </div>
+          <div style={{ display: 'flex', gap: 14, fontSize: 12 }}>
+            <span>
+              ❤️ {hoveredUnit.hp}/{hoveredUnit.maxHp}
+            </span>
+            <span style={{ color: hoveredUnit.movementPoints > 0 ? '#88ddff' : '#666' }}>
+              👢 {hoveredUnit.movementPoints}/{hoveredUnit.maxMovement}
+            </span>
+            <span style={{ color: hoveredUnit.attacked ? '#666' : '#ff8888' }}>
+              🔫 {hoveredUnit.attack}
             </span>
           </div>
         </div>
