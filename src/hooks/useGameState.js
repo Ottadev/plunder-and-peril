@@ -23,12 +23,28 @@ export const UNIT_TYPES = {
 
 let nextUnitId = 1;
 
-function createUnit(type, owner, q, r) {
+// Ship name pools
+const PLAYER_SHIP_NAMES = [
+  'Sea Serpent', 'Red Dawn', 'Iron Tide', 'Crimson Wind',
+  'Shadow Hawk', 'Storm Breaker', 'Ocean Fury', 'Silver Star',
+];
+const AI_SHIP_NAMES = [
+  'Black Raider', 'Cursed Blade', 'Death Knell', 'Rusty Hook',
+  'Skeleton Key', 'Davy Jones', 'Blood Tide', 'Dark Omen',
+];
+let playerNameIndex = 0;
+let aiNameIndex = 0;
+
+function createUnit(type, owner, q, r, customName) {
   const def = UNIT_TYPES[type];
+  const namePool = owner === 'player' ? PLAYER_SHIP_NAMES : AI_SHIP_NAMES;
+  const idx = owner === 'player' ? playerNameIndex++ : aiNameIndex++;
+  const name = customName || namePool[idx % namePool.length] || `${def.label}`;
   return {
     id: `unit-${nextUnitId++}`,
     type,
     owner,
+    shipName: name,
     q,
     r,
     hp: def.maxHp,
@@ -61,7 +77,7 @@ function findOceanTilesInColumns(minQ, maxQ) {
  * Create initial unit placements for both players.
  * Player starts on left side, AI on right side, on ocean tiles.
  */
-function createInitialUnits() {
+function createInitialUnits(flagshipName) {
   // Find ocean tiles on left (q 0-3) and right (q 6-9) sides
   const leftTiles = findOceanTilesInColumns(0, 3);
   const rightTiles = findOceanTilesInColumns(6, 9);
@@ -86,7 +102,7 @@ function createInitialUnits() {
 
   return [
     // Player units
-    createUnit('galleon',    'player', playerPositions[0].q, playerPositions[0].r),
+    createUnit('galleon',    'player', playerPositions[0].q, playerPositions[0].r, flagshipName),
     createUnit('brigantine', 'player', playerPositions[1].q, playerPositions[1].r),
     createUnit('sloop',      'player', playerPositions[2].q, playerPositions[2].r),
     // AI units
@@ -212,6 +228,40 @@ function getValidTargets(unit, allUnits) {
 }
 
 /**
+ * Read customization from localStorage.
+ */
+function getCustomization() {
+  try {
+    return {
+      captainName: localStorage.getItem('plunder-captain') || 'Captain Ed',
+      flagColor: localStorage.getItem('plunder-flag') || '#4488ff',
+      flagshipName: localStorage.getItem('plunder-flagship') || '',
+    };
+  } catch {
+    return { captainName: 'Captain Ed', flagColor: '#4488ff', flagshipName: '' };
+  }
+}
+
+function saveCustomization(captainName, flagColor, flagshipName) {
+  try {
+    localStorage.setItem('plunder-captain', captainName);
+    localStorage.setItem('plunder-flag', flagColor);
+    if (flagshipName) localStorage.setItem('plunder-flagship', flagshipName);
+  } catch { /* ignore */ }
+}
+
+export const FLAG_COLORS = {
+  blue:   '#4488ff',
+  red:    '#ff4444',
+  green:  '#44cc44',
+  gold:   '#ffaa00',
+  purple: '#aa44ff',
+  teal:   '#44cccc',
+};
+
+const CUSTOM_DEFAULTS = getCustomization();
+
+/**
  * Create the initial game state.
  * @param {'skirmish'|'waveDefense'} mode
  */
@@ -233,8 +283,9 @@ function createInitialGameState(mode = 'skirmish') {
       return tiles.slice(0, count);
     }
     const playerPos = getPositions(leftTiles, 3);
+    const flagshipName = CUSTOM_DEFAULTS.flagshipName || 'Sea Serpent';
     const units = [
-      createUnit('galleon',    'player', playerPos[0].q, playerPos[0].r),
+      createUnit('galleon',    'player', playerPos[0].q, playerPos[0].r, flagshipName),
       createUnit('brigantine', 'player', playerPos[1].q, playerPos[1].r),
       createUnit('sloop',      'player', playerPos[2].q, playerPos[2].r),
     ];
@@ -245,6 +296,9 @@ function createInitialGameState(mode = 'skirmish') {
       currentTurn: 1,
       wave: 1,
       highScore,
+      captainName: CUSTOM_DEFAULTS.captainName,
+      flagColor: CUSTOM_DEFAULTS.flagColor,
+      flagshipName,
       gamePhase: 'playerTurn',
       units,
       selectedUnitId: null,
@@ -259,7 +313,7 @@ function createInitialGameState(mode = 'skirmish') {
   }
 
   // Skirmish mode (original behaviour)
-  const units = createInitialUnits();
+  const units = createInitialUnits(CUSTOM_DEFAULTS.flagshipName || 'Sea Serpent');
   const unitPositions = units.map(u => ({ q: u.q, r: u.r }));
   const treasures = generateTreasures(unitPositions);
 
@@ -268,6 +322,9 @@ function createInitialGameState(mode = 'skirmish') {
     currentTurn: 1,
     wave: 1,
     highScore: 0,
+    captainName: CUSTOM_DEFAULTS.captainName,
+    flagColor: CUSTOM_DEFAULTS.flagColor,
+    flagshipName: CUSTOM_DEFAULTS.flagshipName || 'Sea Serpent',
     gamePhase: 'playerTurn', // 'playerTurn' | 'aiTurn' | 'upgradePhase' | 'gameOver'
     units,
     selectedUnitId: null,
@@ -895,6 +952,9 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
     gameMode,
     wave,
     highScore,
+    captainName: gameState.captainName,
+    flagColor: gameState.flagColor,
+    flagshipName: gameState.flagshipName,
 
     // Actions
     selectUnit,
@@ -906,5 +966,17 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
     executeAiTurn,
     refreshTurn,
     applyUpgrade,
+    setCaptainName: (name) => {
+      saveCustomization(name, gameStateRef.current.flagColor, gameStateRef.current.flagshipName);
+      setGameState(prev => ({ ...prev, captainName: name }));
+    },
+    setFlagColor: (color) => {
+      saveCustomization(gameStateRef.current.captainName, color, gameStateRef.current.flagshipName);
+      setGameState(prev => ({ ...prev, flagColor: color }));
+    },
+    setFlagshipName: (name) => {
+      saveCustomization(gameStateRef.current.captainName, gameStateRef.current.flagColor, name);
+      setGameState(prev => ({ ...prev, flagshipName: name }));
+    },
   };
 }

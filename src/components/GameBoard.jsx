@@ -10,7 +10,7 @@ import {
   getTerrainSymbol,
   TERRAIN,
 } from '../hooks/useHexGrid.js';
-import { useGameState, UNIT_TYPES } from '../hooks/useGameState.js';
+import { useGameState, UNIT_TYPES, FLAG_COLORS } from '../hooks/useGameState.js';
 import {
   updateParticles,
   drawParticles,
@@ -79,6 +79,7 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
   const canvasSizeRef = useRef({ width: 0, height: 0 });
   const hoveredHexRef = useRef(null);
   const [explosionEffect, setExplosionEffect] = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
   const prevLastAttackRef = useRef(null);
   const prevUnitPositionsRef = useRef(new Map());
   const prevAliveRef = useRef(new Set());
@@ -405,14 +406,36 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
         ctx.lineWidth = 0.8;
         ctx.strokeRect(barX, barY, barWidth, barHeight);
 
-        // Team pennant flag above ship
-        const pennantImg = isPlayer ? pennantPlayerImg : pennantAiImg;
-        if (pennantImg && pennantImg.complete && pennantImg.naturalWidth > 0) {
-          const pennantSize = HEX_RADIUS * 0.4;
-          const pennantX = cx - pennantSize;
-          const pennantY = cy - spriteSize - pennantSize * 0.5;
-          ctx.drawImage(pennantImg, pennantX, pennantY, pennantSize * 2, pennantSize);
-        }
+        // Team pennant flag above ship — drawn programmatically with flag color
+        const fColor = isPlayer ? (game.flagColor || '#4488ff') : '#ff6666';
+        const poleH = HEX_RADIUS * 0.5;
+        const pennantW = HEX_RADIUS * 0.3;
+        const pennantH = HEX_RADIUS * 0.4;
+        const poleTopY = cy - spriteSize - poleH;
+
+        // Pennant pole
+        ctx.save();
+        ctx.strokeStyle = '#8B7355';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - spriteSize);
+        ctx.lineTo(cx, poleTopY + pennantH * 0.7);
+        ctx.stroke();
+
+        // Pennant flag (triangle)
+        ctx.fillStyle = fColor;
+        ctx.beginPath();
+        ctx.moveTo(cx, poleTopY);
+        ctx.lineTo(cx + pennantW, poleTopY + pennantH * 0.5);
+        ctx.lineTo(cx, poleTopY + pennantH);
+        ctx.closePath();
+        ctx.fill();
+
+        // Pennant outline
+        ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+        ctx.restore();
       }
     }
 
@@ -926,6 +949,9 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
           {game.gamePhase === 'upgradePhase' && '⚡ Prepare!'}
           {game.gamePhase === 'gameOver' && (game.winner === 'player' ? 'Victory!' : 'Defeat')}
         </div>
+        <div style={{ marginTop: 2, fontSize: 12, color: '#c8a86e', fontStyle: 'italic' }}>
+          ⚓ {game.captainName}
+        </div>
         <div style={{ marginTop: 4, fontSize: 12, color: '#888' }}>
           Ships: {game.playerUnits.length}vs{game.aiUnits.length}
         </div>
@@ -945,6 +971,22 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
             {game.upgradeBonuses.attack > 0 && <span>⚔️+{game.upgradeBonuses.attack}</span>}
           </div>
         )}
+        <div
+          onClick={() => setShowSettings(true)}
+          style={{
+            marginTop: 8,
+            fontSize: 16,
+            cursor: 'pointer',
+            opacity: 0.5,
+            transition: 'opacity 0.2s',
+            textAlign: 'center',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.opacity = '1'; }}
+          onMouseLeave={e => { e.currentTarget.style.opacity = '0.5'; }}
+          title="Customize"
+        >
+          ⚙️
+        </div>
       </div>
 
       {/* ── End Turn Button (top-right) ── */}
@@ -1010,9 +1052,12 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
             textAlign: 'center',
           }}
         >
-          <div style={{ fontSize: 18, fontWeight: 'bold', color: '#f0c040', marginBottom: 6 }}>
+          <div style={{ fontSize: 18, fontWeight: 'bold', color: '#f0c040', marginBottom: 2 }}>
             {selectedUnitInfo.owner === 'player' ? '⛵' : '☠️'}{' '}
             {UNIT_TYPES[selectedUnitInfo.type]?.label || selectedUnitInfo.type}
+          </div>
+          <div style={{ fontSize: 12, color: '#aa9966', marginBottom: 6, fontStyle: 'italic' }}>
+            {selectedUnitInfo.shipName}
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 20, fontSize: 14, marginTop: 4 }}>
             <span>
@@ -1057,9 +1102,12 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
             backdropFilter: 'blur(4px)',
           }}
         >
-          <div style={{ fontWeight: 'bold', color: '#f0c040', marginBottom: 4, fontSize: 14 }}>
+          <div style={{ fontWeight: 'bold', color: '#f0c040', marginBottom: 2, fontSize: 14 }}>
             {hoveredUnit.owner === 'player' ? '⛵' : '☠️'}{' '}
             {UNIT_TYPES[hoveredUnit.type]?.label || hoveredUnit.type}
+          </div>
+          <div style={{ fontSize: 11, color: '#aa9966', marginBottom: 4, fontStyle: 'italic' }}>
+            {hoveredUnit.shipName}
           </div>
           <div style={{ display: 'flex', gap: 14, fontSize: 12 }}>
             <span>
@@ -1174,6 +1222,126 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
               <div style={{ color: '#888', fontSize: 12, marginTop: 6, fontFamily: 'sans-serif' }}>
                 Attack +1<br/>Deal more damage
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Settings Overlay ── */}
+      {showSettings && (
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'rgba(0, 0, 0, 0.8)',
+            zIndex: 20,
+          }}
+          onClick={() => setShowSettings(false)}
+        >
+          <div
+            onClick={e => e.stopPropagation()}
+            style={{
+              background: 'rgba(15, 15, 40, 0.95)',
+              border: '2px solid #8a7a5a',
+              borderRadius: 16,
+              padding: '32px 40px',
+              minWidth: 340,
+              fontFamily: 'Georgia, serif',
+              color: '#d4d4e8',
+            }}
+          >
+            <div style={{ fontSize: 24, fontWeight: 'bold', color: '#f0c040', marginBottom: 24, textAlign: 'center' }}>
+              ⚙️ Captain's Quarters
+            </div>
+
+            {/* Captain Name */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 14, color: '#aaa', marginBottom: 6 }}>Captain Name</div>
+              <input
+                value={game.captainName}
+                onChange={e => game.setCaptainName(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: 'rgba(0,0,0,0.4)',
+                  border: '1px solid #5a4a3a',
+                  borderRadius: 8,
+                  padding: '10px 14px',
+                  color: '#f0d080',
+                  fontSize: 16,
+                  fontFamily: 'Georgia, serif',
+                  outline: 'none',
+                }}
+                placeholder="Captain Ed"
+              />
+            </div>
+
+            {/* Flagship Name */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 14, color: '#aaa', marginBottom: 6 }}>Flagship Name</div>
+              <input
+                value={game.flagshipName}
+                onChange={e => game.setFlagshipName(e.target.value)}
+                style={{
+                  width: '100%',
+                  background: 'rgba(0,0,0,0.4)',
+                  border: '1px solid #5a4a3a',
+                  borderRadius: 8,
+                  padding: '10px 14px',
+                  color: '#f0d080',
+                  fontSize: 16,
+                  fontFamily: 'Georgia, serif',
+                  outline: 'none',
+                }}
+                placeholder="Sea Serpent"
+              />
+            </div>
+
+            {/* Flag Color */}
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 14, color: '#aaa', marginBottom: 10 }}>Flag Color</div>
+              <div style={{ display: 'flex', gap: 10, justifyContent: 'center' }}>
+                {Object.entries(FLAG_COLORS).map(([name, color]) => (
+                  <div
+                    key={name}
+                    onClick={() => game.setFlagColor(color)}
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: '50%',
+                      background: color,
+                      cursor: 'pointer',
+                      border: game.flagColor === color ? '3px solid #fff' : '3px solid transparent',
+                      boxShadow: game.flagColor === color ? `0 0 12px ${color}` : 'none',
+                      transition: 'all 0.2s',
+                    }}
+                    title={name}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Close button */}
+            <div style={{ textAlign: 'center' }}>
+              <button
+                onClick={() => setShowSettings(false)}
+                style={{
+                  background: 'linear-gradient(135deg, #2a1a0a, #3a2a1a)',
+                  border: '2px solid #8a7a5a',
+                  borderRadius: 8,
+                  padding: '10px 32px',
+                  color: '#f0d080',
+                  fontFamily: 'Georgia, serif',
+                  fontSize: 16,
+                  fontWeight: 'bold',
+                  cursor: 'pointer',
+                }}
+              >
+                ⚓ Ahoy!
+              </button>
             </div>
           </div>
         </div>
