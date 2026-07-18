@@ -290,3 +290,38 @@ export function spawnWaterRipple(x, y) {
     p.type = 'ring';
   }
 }
+
+/**
+ * Cannon muzzle flash — orange burst of particles at the attacker's hex.
+ * 12 particles, radial spread, ~400ms life, alpha fade 1.0→0.
+ * Colors: amber/orange palette (#f59e0b, #f97316, #fb923c).
+ */
+export function spawnCannonMuzzleFlash(x, y) {
+  const COLORS = [
+    { r: 245, g: 158, b: 11 },  // #f59e0b (amber)
+    { r: 249, g: 115, b: 22 },  // #f97316 (orange)
+    { r: 251, g: 146, b: 60 },  // #fb923c (light orange)
+  ];
+
+  for (let i = 0; i < 12; i++) {
+    const p = acquire();
+    if (!p) break;
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 60 + Math.random() * 120; // 2-6 px/frame
+    p.x = x + (Math.random() - 0.5) * 6;
+    p.y = y + (Math.random() - 0.5) * 6;
+    p.vx = Math.cos(angle) * speed;
+    p.vy = Math.sin(angle) * speed;
+    p.life = 0.3 + Math.random() * 0.1; // ~400ms total
+    p.maxLife = p.life;
+    p.size = 2 + Math.random() * 2; // 2-4px radius
+    const c = COLORS[Math.floor(Math.random() * COLORS.length)];
+    p.r = c.r;
+    p.g = c.g;
+    p.b = c.b;
+    p.a = 1.0;
+    p.drag = 0.94;
+    p.gravity = 0;
+    p.type = 'circle';
+  }
+}

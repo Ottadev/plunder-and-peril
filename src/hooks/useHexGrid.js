@@ -40,15 +40,41 @@ function mulberry32(seed) {
   };
 }
 
+// ── Cellular Automata Configuration ─────────────────────────────────────
+// Rules are adapted for hex grids (6 neighbors max) from the classic
+// B5678/S45678 Moore-neighborhood rules, scaled proportionally:
+//   8-neighbor B5678 → 62.5%-100% of 6 = 3.75-6 → BIRTH [4..6]
+//   8-neighbor S45678 → 50%-100% of 6 = 3-6 → SURVIVE [3..6]
+
+/** Number of CA smoothing passes */
+const CA_PASSES = 3;
+
+/** Birth rule: ocean cell becomes land if neighbor count is in [BIRTH_MIN, BIRTH_MAX] */
+const BIRTH_MIN = 4;
+const BIRTH_MAX = 6;
+
+/** Survival rule: land cell stays land if neighbor count is in [SURVIVE_MIN, SURVIVE_MAX] */
+const SURVIVE_MIN = 3;
+const SURVIVE_MAX = 6;
+
+/** Remove interior lakes (water cells fully surrounded by land) */
+const LAKE_FILL = true;
+
 // ── Island generator ───────────────────────────────────────────────────
 
 /**
  * Generate an organic island map using cellular automata.
  *
+ * Algorithm adapted from B5678/S45678 for hex grids (6 neighbors):
+ *   - Birth:  ocean cell with 4-6 land neighbors → LAND
+ *   - Survive: land cell with 3-6 land neighbors → LAND
+ *   - Otherwise → OCEAN
+ *
  * Process:
- *  1. Place 3-5 island seeds (clusters of land) using a seeded RNG.
- *  2. Grow islands with cellular automata (3 iterations).
- *  3. Classify terrain: beaches → interior → reefs → deep ocean → ports.
+ *  1. Place 3-5 island seed clusters using seeded RNG.
+ *  2. CA smoothing with B5678/S45678-adapted rules for CA_PASSES iterations.
+ *  3. Lake fill: convert isolated water pockets inside land to land.
+ *  4. Classify terrain: beaches → interior → reefs → deep ocean → ports.
  *
  * @param {number} [seed=42]
  * @param {number} [width=10]
@@ -60,12 +86,13 @@ function mulberry32(seed) {
 export function generateMap(seed = 42, width = 10, height = 10, opts = {}) {
   const rng = mulberry32(seed);
 
-  // Step 1: initialise with ocean
+  // ── Step 1: Place island seeds ──────────────────────────────────────
+  // Seed clusters provide initial land masses for the CA to sculpt.
+  // Without seeds, pure random fill erodes completely with strict rules.
   const grid = Array.from({ length: height }, () =>
     Array.from({ length: width }, () => TERRAIN.OCEAN),
   );
 
-  // Step 2: place island seeds
   const islandCount = opts.islandCount ?? (3 + Math.floor(rng() * 3)); // 3-5
   for (let i = 0; i < islandCount; i++) {
     // Prefer central area (avoid edges for seed placement)
@@ -88,20 +115,28 @@ export function generateMap(seed = 42, width = 10, height = 10, opts = {}) {
     }
   }
 
-  // Step 3: cellular automata smoothing (3 iterations)
-  for (let iter = 0; iter < 3; iter++) {
+  // ── Step 2: Cellular automata smoothing (B5678/S45678 hex-adapted) ──
+  // Rules (hex neighborhood, max 6 neighbors):
+  //   - Birth:  ocean cell with [BIRTH_MIN..BIRTH_MAX] land neighbors → LAND
+  //   - Survive: land cell with [SURVIVE_MIN..SURVIVE_MAX] land neighbors → LAND
+  //   - Otherwise → OCEAN
+  // This erodes isolated pixels and fills small gaps → organic coastlines.
+  for (let iter = 0; iter < CA_PASSES; iter++) {
     const next = grid.map(row => [...row]);
     for (let r = 0; r < height; r++) {
       for (let c = 0; c < width; c++) {
         const isLand = grid[r][c] === TERRAIN.LAND;
         const neighbors = countLandNeighbors(grid, c, r, width, height);
 
-        if (isLand && neighbors <= 1) {
-          next[r][c] = TERRAIN.OCEAN; // erode isolated land
-        } else if (!isLand && neighbors >= 5) {
-          next[r][c] = TERRAIN.LAND; // fill ocean pockets
+        if (isLand) {
+          // Survival rule: land erodes without enough support
+          next[r][c] = (neighbors >= SURVIVE_MIN && neighbors <= SURVIVE_MAX)
+            ? TERRAIN.LAND : TERRAIN.OCEAN;
+        } else {
+          // Birth rule: ocean fills in when heavily surrounded
+          next[r][c] = (neighbors >= BIRTH_MIN && neighbors <= BIRTH_MAX)
+            ? TERRAIN.LAND : TERRAIN.OCEAN;
         }
-        // else keep unchanged
       }
     }
     // Copy back
@@ -112,7 +147,24 @@ export function generateMap(seed = 42, width = 10, height = 10, opts = {}) {
     }
   }
 
-  // Step 4: classify terrain
+  // ── Step 3: Lake fill (remove interior water pockets) ───────────────
+  // An ocean cell fully surrounded by land (all 6 hex neighbors are land)
+  // is an interior lake — convert it to land for cleaner island shapes.
+  if (LAKE_FILL) {
+    for (let r = 0; r < height; r++) {
+      for (let c = 0; c < width; c++) {
+        if (grid[r][c] === TERRAIN.OCEAN) {
+          const neighbors = countLandNeighbors(grid, c, r, width, height);
+          // If ALL neighbors are land (6 out of 6 in hex), fill the lake
+          if (neighbors >= 6) {
+            grid[r][c] = TERRAIN.LAND;
+          }
+        }
+      }
+    }
+  }
+
+  // ── Step 4: Classify terrain ────────────────────────────────────────
   const classified = grid.map((row, r) =>
     row.map((tile, c) => {
       if (tile !== TERRAIN.OCEAN) {
@@ -385,6 +437,25 @@ export function getMovementCost(terrain) {
       return 1;
     default:
       return Infinity; // impassable
+  }
+}
+
+/**
+ * Get defense bonus for a terrain type.
+ * Higher defense means units on this tile take less damage.
+ * Applied when a unit is ATTACKED while standing on this terrain.
+ */
+export function getTerrainDefense(terrain) {
+  switch (terrain) {
+    case TERRAIN.JUNGLE:   return 2; // dense cover
+    case TERRAIN.LAND:     return 1; // solid ground
+    case TERRAIN.REEF:     return 1; // rocky obstacle
+    case TERRAIN.SAND:     return 0; // exposed beach
+    case TERRAIN.SHALLOW:  return 0;
+    case TERRAIN.OCEAN:    return 0;
+    case TERRAIN.DEEP_OCEAN: return 0;
+    case TERRAIN.PORT:     return 0; // neutral zone
+    default:               return 0;
   }
 }
 

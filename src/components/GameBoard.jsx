@@ -18,7 +18,9 @@ import {
   spawnCannonImpact,
   spawnShipExplosion,
   spawnWaterRipple,
+  spawnCannonMuzzleFlash,
 } from '../effects/ParticleEngine.js';
+import { playCannonFire, playExplosion, playMove, playAbility } from '../effects/AudioEngine.js';
 
 // ── Asset imports (Vite returns URL strings, so we wrap in Image()) ──
 import sloopUrl from '../assets/sloop.jpg';
@@ -86,6 +88,8 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
   const rafRef = useRef(null);
   const lastFrameTimeRef = useRef(0);
   const rippleTimerRef = useRef(0);
+  const exploredHexesRef = useRef(new Set());  // Fog of War: accumulated hexes ever seen
+  const damageNumbersRef = useRef([]);  // Floating damage numbers: [{q,r,value,startTime,owner}]
 
   // ── Ship movement animation state ──
   const isAnimatingRef = useRef(false);
@@ -127,6 +131,7 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
     const currentAlive = new Set(game.units.filter(u => u.hp > 0).map(u => u.id));
     for (const id of prevAliveRef.current) {
       if (!currentAlive.has(id)) {
+        playExplosion(); // Audio: explosion on ship destruction
         // This ship was destroyed — find its last position from current units array
         const deadUnit = game.units.find(u => u.id === id);
         if (deadUnit) {
@@ -142,9 +147,16 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
   useEffect(() => {
     if (game.lastAttack && game.lastAttack !== prevLastAttackRef.current) {
       prevLastAttackRef.current = game.lastAttack;
+      playCannonFire(); // Audio: cannon sound on every attack
       const offset = gridOffsetRef.current;
       const pixel = hexToPixel(game.lastAttack.q, game.lastAttack.r);
       spawnCannonImpact(pixel.x + offset.offsetX, pixel.y + offset.offsetY);
+
+      // Spawn muzzle flash at the attacker's hex (orange burst)
+      if (game.lastAttack.aq !== undefined) {
+        const attackerPixel = hexToPixel(game.lastAttack.aq, game.lastAttack.ar);
+        spawnCannonMuzzleFlash(attackerPixel.x + offset.offsetX, attackerPixel.y + offset.offsetY);
+      }
 
       setExplosionEffect({
         q: game.lastAttack.q,
@@ -156,11 +168,36 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
     }
   }, [game.lastAttack]);
 
+  // ── Floating damage numbers: spawn on attack ──
+  useEffect(() => {
+    if (game.lastAttack && game.lastAttack !== prevLastAttackRef.current) {
+      // Use the effective damage from lastAttack (already accounts for terrain defense)
+      const dmg = game.lastAttack.damage || 1;
+      // Determine attacker owner from lastAttack position match
+      const attackerAtPos = game.units.find(
+        u => u.q === game.lastAttack.aq && u.r === game.lastAttack.ar
+      );
+      damageNumbersRef.current.push({
+        q: game.lastAttack.q,
+        r: game.lastAttack.r,
+        value: dmg,
+        startTime: performance.now(),
+        owner: attackerAtPos ? attackerAtPos.owner : 'ai',
+      });
+      // Clean old entries
+      const now = performance.now();
+      damageNumbersRef.current = damageNumbersRef.current.filter(
+        d => now - d.startTime < 1200
+      );
+    }
+  }, [game.lastAttack, game.units]);
+
   // ────────────────────────────── DRAW FUNCTION ──────────────────────────────
 
-  const draw = useCallback((ctx, width, height, hover, state, explosion, animatingUnitPos) => {
+  const draw = useCallback((ctx, width, height, hover, state, explosion, animatingUnitPos, fogHexes) => {
     // state = { units, selectedUnit, validMoveSet, validTargetSet } or null
     // animatingUnitPos = { unitId, cx, cy } | null — override position for animated unit
+    // fogHexes = { visible: Set of "q,r", explored: Set of "q,r" } | null — Fog of War
     ctx.clearRect(0, 0, width, height);
 
     // Calculate the pixel offset to center the grid
@@ -303,6 +340,53 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
       ctx.strokeStyle = '#ffd700';
       ctx.lineWidth = 3.5;
       ctx.stroke();
+    }
+
+    // ── 2b. Fog of War overlay ──
+    if (fogHexes && fogHexes.visible) {
+      for (let q = 0; q < GRID_WIDTH; q++) {
+        for (let r = 0; r < GRID_HEIGHT; r++) {
+          const hexKey = `${q},${r}`;
+          if (fogHexes.visible.has(hexKey)) continue; // Skip visible hexes
+
+          const { x, y } = hexToPixel(q, r);
+          const cx = x + offsetX;
+          const cy = y + offsetY;
+          const explored = fogHexes.explored && fogHexes.explored.has(hexKey);
+
+          drawHexPath(cx, cy);
+          // Explored but not visible: lighter fog. Never explored: darker fog.
+          ctx.fillStyle = explored
+            ? 'rgba(5, 10, 20, 0.55)'
+            : 'rgba(5, 10, 20, 0.85)';
+          ctx.fill();
+        }
+      }
+    }
+
+    // ── 2c. Floating damage numbers ──
+    const now = performance.now();
+    const activeDmgNums = damageNumbersRef.current.filter(d => now - d.startTime < 800);
+    damageNumbersRef.current = activeDmgNums; // cleanup in-place
+    for (const dn of activeDmgNums) {
+      const { x, y } = hexToPixel(dn.q, dn.r);
+      const cx = x + offsetX;
+      const cy = y + offsetY;
+      const elapsed = (now - dn.startTime) / 1000; // seconds
+      const progress = Math.min(elapsed / 0.6, 1); // 600ms animation
+      const alpha = 1 - progress;
+      const floatY = -20 * progress; // float upward 20px
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.font = `bold ${Math.round(HEX_RADIUS * 0.55)}px Georgia`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillStyle = dn.owner === 'ai' ? '#ff4444' : '#ffaa00'; // red for AI hits, orange for player hits
+      ctx.shadowColor = 'rgba(0,0,0,0.8)';
+      ctx.shadowBlur = 4;
+      ctx.fillText(`-${dn.value}`, cx, cy + floatY);
+      ctx.restore();
     }
 
     // ── 3. Draw units as sprite images (clipped to hex + chroma-key blue bg) ──
@@ -561,7 +645,10 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
         validMoveSet: gs.validMoveSet,
         validTargetSet: gs.validTargetSet,
         treasures: gs.treasures,
-      }, explosionEffect, { unitId: anim.unitId, cx: interpX, cy: interpY });
+      }, explosionEffect, { unitId: anim.unitId, cx: interpX, cy: interpY }, {
+        visible: gs.visibleHexes || new Set(),
+        explored: exploredHexesRef.current,
+      });
 
       if (progress < 1) {
         requestAnimationFrame(animateFrame);
@@ -627,7 +714,10 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
         validMoveSet: gs.validMoveSet,
         validTargetSet: gs.validTargetSet,
         treasures: gs.treasures,
-      }, explosionEffect);
+      }, explosionEffect, null, {
+        visible: gs.visibleHexes || new Set(),
+        explored: exploredHexesRef.current,
+      });
     };
 
     const handleMouseMove = (e) => {
@@ -838,6 +928,15 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
     };
   }, []);
 
+  // ── Fog of War: track explored hexes ──
+  useEffect(() => {
+    if (game.visibleHexes) {
+      for (const h of game.visibleHexes) {
+        exploredHexesRef.current.add(h);
+      }
+    }
+  }, [game.visibleHexes]);
+
   // ────────────────────── REDRAW ON HOVER CHANGE ───────────────────────
 
   useEffect(() => {
@@ -854,7 +953,10 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
         validMoveSet: gs.validMoveSet,
         validTargetSet: gs.validTargetSet,
         treasures: gs.treasures,
-      }, explosionEffect);
+      }, explosionEffect, null, {
+        visible: gs.visibleHexes || new Set(),
+        explored: exploredHexesRef.current,
+      });
     }
   }, [draw, hoveredHex, explosionEffect]);
 
@@ -873,7 +975,10 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
         validMoveSet: game.validMoveSet,
         validTargetSet: game.validTargetSet,
         treasures: game.treasures,
-      }, explosionEffect);
+      }, explosionEffect, null, {
+        visible: game.visibleHexes || new Set(),
+        explored: exploredHexesRef.current,
+      });
     }
   }, [
     draw,
@@ -1079,6 +1184,33 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
               </span>
             </span>
           </div>
+          {/* Ability button */}
+          {selectedUnitInfo.owner === 'player' && UNIT_TYPES[selectedUnitInfo.type]?.ability && (
+            <div style={{ marginTop: 10 }}>
+              <button
+                onClick={() => { game.activateAbility(); playAbility(); }}
+                disabled={!selectedUnitInfo.abilityReady}
+                style={{
+                  background: selectedUnitInfo.abilityReady
+                    ? 'linear-gradient(135deg, #1a0a2a, #3a1a4a)'
+                    : 'rgba(30,30,30,0.5)',
+                  border: selectedUnitInfo.abilityReady ? '2px solid #aa44ff' : '1px solid #444',
+                  borderRadius: 8,
+                  padding: '6px 18px',
+                  color: selectedUnitInfo.abilityReady ? '#d4b0ff' : '#555',
+                  fontFamily: 'Georgia, serif',
+                  fontSize: 13,
+                  fontWeight: 'bold',
+                  cursor: selectedUnitInfo.abilityReady ? 'pointer' : 'default',
+                  transition: 'all 0.2s',
+                }}
+                title={UNIT_TYPES[selectedUnitInfo.type].abilityDesc}
+              >
+                ✨ {UNIT_TYPES[selectedUnitInfo.type].abilityLabel}
+                {!selectedUnitInfo.abilityReady && ` (CD: ${selectedUnitInfo.abilityCooldownTurns})`}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -1321,6 +1453,30 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
                     title={name}
                   />
                 ))}
+              </div>
+            </div>
+
+            {/* AI Aggression */}
+            <div style={{ marginBottom: 24 }}>
+              <div style={{ fontSize: 14, color: '#aaa', marginBottom: 6 }}>
+                🤖 AI Aggression: {Math.round(game.aiAggression * 100)}%
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                value={Math.round((game.aiAggression || 0.5) * 100)}
+                onChange={e => game.setAiAggression(parseInt(e.target.value) / 100)}
+                style={{
+                  width: '100%',
+                  accentColor: '#aa44ff',
+                  cursor: 'pointer',
+                }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#666', marginTop: 2 }}>
+                <span>🐢 Passive</span>
+                <span>⚖️ Balanced</span>
+                <span>🔥 Aggressive</span>
               </div>
             </div>
 

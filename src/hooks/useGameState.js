@@ -6,6 +6,7 @@ import {
   isCoastalTile,
   isNavigableTile,
   getMovementCost,
+  getTerrainDefense,
   setMap,
   TERRAIN,
 } from './useHexGrid.js';
@@ -16,9 +17,9 @@ const GRID_HEIGHT = 10;
  * Unit type definitions: stats for each ship class.
  */
 export const UNIT_TYPES = {
-  sloop:      { maxHp: 4, maxMovement: 3, attack: 1, range: 1, label: 'Sloop' },
-  brigantine: { maxHp: 6, maxMovement: 2, attack: 2, range: 1, label: 'Brigantine' },
-  galleon:    { maxHp: 8, maxMovement: 1, attack: 3, range: 1, label: 'Galleon' },
+  sloop:      { maxHp: 4, maxMovement: 3, attack: 1, range: 1, label: 'Sloop', ability: 'recon', abilityLabel: 'Ricognizione', abilityCooldown: 3, abilityDesc: 'Rivela 3 tile nella nebbia (raggio 3)' },
+  brigantine: { maxHp: 6, maxMovement: 2, attack: 2, range: 1, label: 'Brigantine', ability: 'focusFire', abilityLabel: 'Fuoco Concentrato', abilityCooldown: 3, abilityDesc: '+50% danno nel prossimo attacco' },
+  galleon:    { maxHp: 8, maxMovement: 1, attack: 3, range: 1, label: 'Galleon', ability: 'shield', abilityLabel: 'Scudo', abilityCooldown: 3, abilityDesc: 'Protegge alleati adiacenti (-2 danni subiti per 1 turno)' },
 };
 
 let nextUnitId = 1;
@@ -54,6 +55,10 @@ function createUnit(type, owner, q, r, customName) {
     attack: def.attack,
     range: def.range,
     attacked: false,
+    abilityReady: true,      // ability is ready if not on cooldown
+    abilityCooldownTurns: 0,  // turns until ability is ready again
+    shieldedUntilTurn: 0,     // turn number until shield effect expires
+    focusFireReady: false,    // next attack gets +50% damage
   };
 }
 
@@ -157,6 +162,39 @@ function generateTreasures(unitPositions) {
 }
 
 /**
+ * Compute all hexes visible from a set of units with a given vision range.
+ * Uses BFS limited to `visionRange` hexes from each unit, ignoring terrain (you can see over land).
+ */
+function computeVisibleHexes(units, visionRange = 2) {
+  const visible = new Set();
+  const key = (q, r) => `${q},${r}`;
+
+  for (const unit of units) {
+    if (unit.hp <= 0) continue;
+    // BFS from unit position, capped at visionRange
+    const visited = new Set();
+    const queue = [{ q: unit.q, r: unit.r, dist: 0 }];
+    visited.add(key(unit.q, unit.r));
+    visible.add(key(unit.q, unit.r));
+
+    while (queue.length > 0) {
+      const cur = queue.shift();
+      if (cur.dist >= visionRange) continue;
+      const neighbors = getHexNeighbors(cur.q, cur.r);
+      for (const n of neighbors) {
+        const nk = key(n.q, n.r);
+        if (visited.has(nk)) continue;
+        if (!isWithinBounds(n.q, n.r, GRID_WIDTH, GRID_HEIGHT)) continue;
+        visited.add(nk);
+        visible.add(nk);
+        queue.push({ q: n.q, r: n.r, dist: cur.dist + 1 });
+      }
+    }
+  }
+  return visible;
+}
+
+/**
  * Run BFS to find all hexes reachable by a unit given its remaining movement points,
  * terrain costs, and occupancy.
  */
@@ -250,6 +288,18 @@ function saveCustomization(captainName, flagColor, flagshipName) {
   } catch { /* ignore */ }
 }
 
+function getAiAggression() {
+  try {
+    return parseFloat(localStorage.getItem('plunder-ai-aggression') || '0.5');
+  } catch { return 0.5; }
+}
+
+function setAiAggression(val) {
+  try {
+    localStorage.setItem('plunder-ai-aggression', String(val));
+  } catch { /* ignore */ }
+}
+
 export const FLAG_COLORS = {
   blue:   '#4488ff',
   red:    '#ff4444',
@@ -309,7 +359,10 @@ function createInitialGameState(mode = 'skirmish') {
       aiTreasures: 0,
       upgradeBonuses: { hp: 0, movement: 0, attack: 0 },
       lastUpgradeTurn: 0,
+      exploredHexes: [],
+      aiAggression: getAiAggression(), // 0-1 slider for AI behaviour
     };
+
   }
 
   // Skirmish mode (original behaviour)
@@ -335,7 +388,9 @@ function createInitialGameState(mode = 'skirmish') {
     aiTreasures: 0,     // treasures collected by AI
     upgradeBonuses: { hp: 0, movement: 0, attack: 0 },
     lastUpgradeTurn: 0,
-  };
+    exploredHexes: [],
+    aiAggression: getAiAggression(),
+    };
 }
 
 /**
@@ -460,6 +515,11 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
     [units]
   );
 
+  // ── Fog of War: compute currently visible hexes from player units ──
+  const visibleHexes = useMemo(() => {
+    return computeVisibleHexes(playerUnits, 2);
+  }, [playerUnits]);
+
   /**
    * Refresh movement points for all units of a given owner at turn start.
    */
@@ -472,6 +532,8 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
             ...u,
             movementPoints: u.maxMovement,
             attacked: false,
+            abilityCooldownTurns: Math.max(0, (u.abilityCooldownTurns || 0) - 1),
+            abilityReady: (u.abilityCooldownTurns || 0) <= 1, // ready if 0 or about to become 0
           };
         }
         return u;
@@ -616,8 +678,13 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
       const dist = Math.max(dq, dr, ds);
       if (dist > unit.range) return prev;
 
-      // Apply damage
-      const newHp = target.hp - unit.attack;
+      // Apply damage with terrain defense reduction
+      const targetTerrain = getTileTerrain(target.q, target.r);
+      const defense = getTerrainDefense(targetTerrain);
+      // Check for Focus Fire bonus damage
+      const dmgMultiplier = unit.focusFireReady ? 1.5 : 1.0;
+      const effectiveDmg = Math.max(1, Math.round(unit.attack * dmgMultiplier) - defense);
+      const newHp = target.hp - effectiveDmg;
       const targetDestroyed = newHp <= 0;
 
       // Check win condition
@@ -638,19 +705,23 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
         selectedUnitId: null,
         gamePhase: newGamePhase,
         winner,
-        lastAttack: { q: target.q, r: target.r, timestamp: Date.now() },
+        lastAttack: { q: target.q, r: target.r, aq: unit.q, ar: unit.r, damage: effectiveDmg, timestamp: Date.now() },
         units: prev.units.map(u => {
           if (u.id === unit.id) {
             return {
               ...u,
               movementPoints: 0,
               attacked: true,
+              focusFireReady: false, // consume the buff
             };
           }
           if (u.id === target.id) {
+            // Reduce damage if target is shielded
+            const shieldReduction = target.shieldedUntilTurn >= prev.currentTurn ? 2 : 0;
+            const finalHp = target.hp - Math.max(1, effectiveDmg - shieldReduction);
             return {
               ...u,
-              hp: Math.max(0, newHp),
+              hp: Math.max(0, finalHp),
             };
           }
           return u;
@@ -734,11 +805,64 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
           }
         }
 
-        // If in attack range, attack
+        // If in attack range, decide based on aggression
         if (nearest && nearestDist <= aiUnit.range) {
-          const newHp = nearest.hp - aiUnit.attack;
+          // AI aggression affects attack decision
+          // Low aggression: only attack if clear advantage (damage ratio favorable)
+          // High aggression: always attack if possible
+          const agg = prev.aiAggression || 0.5;
+          const damageRatio = nearest.hp > 0 ? aiUnit.attack / nearest.hp : 2;
+          const attackThreshold = 1.0 - agg; // 0.7 at low agg, 0.0 at high agg
+          const shouldAttack = damageRatio >= attackThreshold || agg > 0.7 || aiUnit.attack >= nearest.hp;
+
+          if (!shouldAttack) {
+            // Skip attack, try to move instead
+            const moves = bfsValidMoves(aiUnit, updatedUnits);
+            if (moves.length > 0) {
+              // Move away from danger if low aggression
+              let bestMove = null;
+              if (agg < 0.4) {
+                // Flee: move away from nearest player
+                let bestDist = 0;
+                for (const m of moves) {
+                  const dq2 = Math.abs(nearest.q - m.q);
+                  const dr2 = Math.abs(nearest.r - m.r);
+                  const ds2 = Math.abs((-nearest.q - nearest.r) - (-m.q - m.r));
+                  const dist2 = Math.max(dq2, dr2, ds2);
+                  if (dist2 > bestDist) { bestDist = dist2; bestMove = m; }
+                }
+              } else {
+                // Move toward (normal behavior)
+                let bestDist = nearestDist;
+                for (const m of moves) {
+                  const dq2 = Math.abs(nearest.q - m.q);
+                  const dr2 = Math.abs(nearest.r - m.r);
+                  const ds2 = Math.abs((-nearest.q - nearest.r) - (-m.q - m.r));
+                  const dist2 = Math.max(dq2, dr2, ds2);
+                  if (dist2 < bestDist) { bestDist = dist2; bestMove = m; }
+                }
+              }
+              if (bestMove) {
+                const terrain = getTileTerrain(bestMove.q, bestMove.r);
+                const cost = getMovementCost(terrain);
+                updatedUnits = updatedUnits.map(u => {
+                  if (u.id === aiId) {
+                    return { ...u, q: bestMove.q, r: bestMove.r, movementPoints: Math.max(0, u.movementPoints - cost) };
+                  }
+                  return u;
+                });
+              }
+            }
+            continue;
+          }
+
+          // Apply terrain defense
+          const targetTerrain = getTileTerrain(nearest.q, nearest.r);
+          const defense = getTerrainDefense(targetTerrain);
+          const effectiveDmg = Math.max(1, aiUnit.attack - defense);
+          const newHp = nearest.hp - effectiveDmg;
           const destroyed = newHp <= 0;
-          aiLastAttack = { q: nearest.q, r: nearest.r, timestamp: Date.now() };
+          aiLastAttack = { q: nearest.q, r: nearest.r, aq: aiUnit.q, ar: aiUnit.r, damage: effectiveDmg, timestamp: Date.now() };
           updatedUnits = updatedUnits.map(u => {
             if (u.id === aiId) {
               return { ...u, movementPoints: 0, attacked: true };
@@ -955,6 +1079,9 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
     captainName: gameState.captainName,
     flagColor: gameState.flagColor,
     flagshipName: gameState.flagshipName,
+    visibleHexes,        // Fog of War: Set of "q,r" hexes currently visible
+    exploredHexes: gameState.exploredHexes,
+    aiAggression: gameState.aiAggression,
 
     // Actions
     selectUnit,
@@ -966,6 +1093,38 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
     executeAiTurn,
     refreshTurn,
     applyUpgrade,
+    activateAbility: () => {
+      setGameState(prev => {
+        if (prev.gamePhase !== 'playerTurn' || !prev.selectedUnitId) return prev;
+        const unit = prev.units.find(u => u.id === prev.selectedUnitId);
+        if (!unit || !unit.abilityReady || unit.hp <= 0) return prev;
+        const def = UNIT_TYPES[unit.type];
+        if (!def.ability) return prev;
+        let updatedUnits = prev.units.map(u => ({ ...u }));
+        switch (def.ability) {
+          case 'recon': {
+            const visible = new Set(), visited = new Set();
+            const queue = [{ q: unit.q, r: unit.r, dist: 0 }];
+            visited.add(`${unit.q},${unit.r}`);
+            while (queue.length > 0) { const cur = queue.shift(); visible.add(`${cur.q},${cur.r}`); if (cur.dist >= 3) continue;
+              for (const n of getHexNeighbors(cur.q, cur.r)) { const nk = `${n.q},${n.r}`; if (visited.has(nk) || !isWithinBounds(n.q,n.r,GRID_WIDTH,GRID_HEIGHT)) continue; visited.add(nk); queue.push({q:n.q,r:n.r,dist:cur.dist+1}); } }
+            const unexplored = [...visible].filter(h => !prev.exploredHexes.includes(h));
+            for (let i = unexplored.length-1; i>0; i--) { const j = Math.floor(Math.random()*(i+1)); [unexplored[i],unexplored[j]]=[unexplored[j],unexplored[i]]; }
+            return { ...prev, exploredHexes: [...prev.exploredHexes, ...unexplored.slice(0,3)],
+              units: updatedUnits.map(u => u.id===unit.id ? {...u,abilityReady:false,abilityCooldownTurns:def.abilityCooldown,movementPoints:0,attacked:true} : u) };
+          }
+          case 'focusFire':
+            return { ...prev, units: updatedUnits.map(u => u.id===unit.id ? {...u,abilityReady:false,abilityCooldownTurns:def.abilityCooldown,focusFireReady:true,movementPoints:0,attacked:true} : u) };
+          case 'shield': {
+            const ct = prev.currentTurn;
+            for (const n of getHexNeighbors(unit.q,unit.r))
+              updatedUnits = updatedUnits.map(u => u.owner==='player'&&u.q===n.q&&u.r===n.r&&u.hp>0&&u.id!==unit.id ? {...u,shieldedUntilTurn:ct+1} : u);
+            return { ...prev, units: updatedUnits.map(u => u.id===unit.id ? {...u,abilityReady:false,abilityCooldownTurns:def.abilityCooldown,movementPoints:0,attacked:true} : u) };
+          }
+          default: return prev;
+        }
+      });
+    },
     setCaptainName: (name) => {
       saveCustomization(name, gameStateRef.current.flagColor, gameStateRef.current.flagshipName);
       setGameState(prev => ({ ...prev, captainName: name }));
@@ -977,6 +1136,10 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
     setFlagshipName: (name) => {
       saveCustomization(gameStateRef.current.captainName, gameStateRef.current.flagColor, name);
       setGameState(prev => ({ ...prev, flagshipName: name }));
+    },
+    setAiAggression: (val) => {
+      setAiAggression(val);
+      setGameState(prev => ({ ...prev, aiAggression: val }));
     },
   };
 }
