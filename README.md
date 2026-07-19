@@ -1,16 +1,55 @@
-# React + Vite
+# Plunder & Peril 🏴‍☠️
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+> Gioco di strategia esagonale a turni a tema piratesco — React 19 + Canvas 2D
 
-Currently, two official plugins are available:
+Due flotte si affrontano su un arcipelago generato proceduralmente. Nebbia di guerra, abilità speciali per classe nave, danni volanti, audio sintetizzato e AI adattiva.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## 🎮 Prova subito
 
-## React Compiler
+```bash
+cd ~/Documents/plunder-and-peril
+npm run dev -- --host 0.0.0.0
+# Apri http://deck:5173
+```
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## ✨ Feature (v0.5.0)
 
-## Expanding the ESLint configuration
+| Categoria | Feature |
+|---|---|
+| **🌫️ Nebbia** | Visibility BFS range 2, esplorazione persistente, overlay 2 livelli |
+| **⚔️ Abilità** | Sloop→Ricognizione, Brigantine→Fuoco Concentrato, Galleon→Scudo |
+| **💥 Danni** | Floating numbers animati (-N con fade 600ms) |
+| **🗺️ Terreno** | Difesa variabile: giungla +2, terra +1, costa 0 |
+| **🎭 AI** | Slider aggressione 0-100% (passiva→aggressiva) |
+| **🎵 Audio** | 5 suoni synth Web Audio API (0 file audio) |
+| **⚓ Modalità** | Skirmish 3v3 + caccia tesoro \| Wave Defense ∞ ondate |
+| **🎨 Polish** | Particelle, animazioni easing, chroma-key sprite, personalizzazione |
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## 🔧 Stack
+
+- React 19 + Vite 8
+- Canvas 2D (doppio layer)
+- Web Audio API synth
+- 16 asset pixel art (NanoBanana 2)
+- Build: 35 moduli, ~280ms
+
+## 📁 Architettura
+
+```
+src/
+├── hooks/
+│   ├── useHexGrid.js      # Coordinate, cellular automata, pathfinding
+│   └── useGameState.js    # Regole, AI, abilità, nebbia
+├── effects/
+│   ├── ParticleEngine.js  # Pool 300 particelle, 6 effetti
+│   └── AudioEngine.js     # 5 suoni synth
+└── components/
+    └── GameBoard.jsx       # Canvas rendering, HUD, input
+```
+
+## 🚀 Next (v0.6.0)
+
+- Event System + Weather
+- Post-Game Stats
+- Mode Selection Screen
+- Fleet Composer
