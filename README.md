@@ -7,9 +7,16 @@ Due flotte si affrontano su un arcipelago generato proceduralmente. Nebbia di gu
 ## 🎮 Prova subito
 
 ```bash
-cd ~/Documents/plunder-and-peril
+cd ~/Progetti/plunder-and-peril
 npm run dev -- --host 0.0.0.0
 # Apri http://deck:5173
+```
+
+## 🧪 Test
+
+```bash
+npm test
+# 88 test, 3 file (Vitest) — baseline 07/08/2026, cov 41%
 ```
 
 ## ✨ Feature (v0.5.0)
