@@ -37,7 +37,7 @@ describe("useHexGrid — coordinates", () => {
     expect(x).toBeGreaterThan(0);
     expect(y).toBeCloseTo(0, 1);
 
-    const { x: x2, y: y2 } = hexToPixel(0, 1);
+    const { y: y2 } = hexToPixel(0, 1);
     expect(y2).toBeGreaterThan(0);
   });
 
@@ -210,15 +210,12 @@ describe("useHexGrid — terrain queries", () => {
   it("isCoastalTile identifies land adjacent to water", () => {
     // Should find some coastal tiles on a generated map
     let hasCoastal = false;
-    let hasNonCoastal = false;
     for (let q = 0; q < 10; q++) {
       for (let r = 0; r < 10; r++) {
         const terrain = getTileTerrain(q, r);
         if (terrain === TERRAIN.LAND || terrain === TERRAIN.JUNGLE) {
           if (isCoastalTile(q, r, 10, 10)) {
             hasCoastal = true;
-          } else {
-            hasNonCoastal = true;
           }
         }
       }
@@ -316,12 +313,11 @@ describe("useHexGrid — pathfinding", () => {
       }
     }
     if (tiles.length >= 2) {
-      // With maxCost=1, only adjacent tiles reachable
+      // With maxCost=1, only tiles reachable within 1 step (adjacent) can have a path
       const start = tiles[0];
       const end = tiles[tiles.length - 1];
       const pathFar = bfsPathTo(start.q, start.r, end.q, end.r, 1, new Set(), 10, 10);
-      // Might be null if not adjacent
-      // This is expected behavior
+      expect(pathFar === null || pathFar.length <= 2).toBe(true);
     }
   });
 

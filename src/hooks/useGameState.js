@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useRef } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   getTileTerrain,
   getHexNeighbors,
@@ -9,6 +9,7 @@ import {
   getTerrainDefense,
   setMap,
   TERRAIN,
+  bfsPathTo,
 } from './useHexGrid.js';
 const GRID_WIDTH = 10;
 const GRID_HEIGHT = 10;
@@ -228,12 +229,9 @@ function bfsValidMoves(unit, allUnits) {
       if (visited.has(nKey)) continue;
       if (!isWithinBounds(n.q, n.r, GRID_WIDTH, GRID_HEIGHT)) continue;
 
-      // Only ocean and coastal land tiles are navigable
+      // Only navigable terrain (ocean, shallow, sand, port) is traversable
       const terrain = getTileTerrain(n.q, n.r);
-      const navigable =
-        terrain === 'ocean' ||
-        (terrain === 'land' && isCoastalTile(n.q, n.r, GRID_WIDTH, GRID_HEIGHT));
-      if (!navigable) continue;
+      if (!isNavigableTile(n.q, n.r, GRID_WIDTH, GRID_HEIGHT)) continue;
 
       // Cannot move onto occupied hex
       if (occupied.has(nKey)) continue;
@@ -470,7 +468,9 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
 
   // Ref for reading current state inside callbacks without re-renders
   const gameStateRef = useRef(gameState);
-  gameStateRef.current = gameState;
+  useEffect(() => {
+    gameStateRef.current = gameState;
+  });
 
   const { units, selectedUnitId, currentTurn, gamePhase, winner, lastAttack, treasures, playerTreasures, aiTreasures, upgradeBonuses, wave, highScore } = gameState;
 
@@ -540,6 +540,15 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
       }),
     }));
   }, []);
+
+  // Refresh player units at the start of every player turn.
+  // Covers initial mount, applyUpgrade, and the playerTurn transitions inside executeAiTurn.
+  useEffect(() => {
+    if (gamePhase === 'playerTurn') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- intentional: refresh stored turn-state when the phase flips to playerTurn (not derivable during render)
+      refreshTurn('player');
+    }
+  }, [gamePhase, refreshTurn]);
 
   /**
    * Select a unit by ID. Only player units can be selected during playerTurn.
@@ -760,8 +769,6 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
 
       let aiLastAttack = null;
 
-      // Track AI treasure collection during movement
-      let aiCollectedTreasures = [];
       let currentTreasures = [...prev.treasures];
       let currentAiTreasures = prev.aiTreasures;
       let currentPlayerTreasures = prev.playerTreasures;

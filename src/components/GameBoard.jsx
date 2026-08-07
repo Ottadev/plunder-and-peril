@@ -20,7 +20,7 @@ import {
   spawnWaterRipple,
   spawnCannonMuzzleFlash,
 } from '../effects/ParticleEngine.js';
-import { playCannonFire, playExplosion, playMove, playAbility } from '../effects/AudioEngine.js';
+import { playCannonFire, playExplosion, playAbility } from '../effects/AudioEngine.js';
 
 // ── Asset imports (Vite returns URL strings, so we wrap in Image()) ──
 import sloopUrl from '../assets/sloop.jpg';
@@ -33,8 +33,6 @@ import explosionUrl from '../assets/explosion.jpg';
 import treasurechestUrl from '../assets/treasurechest.jpg';
 import portIconUrl from '../assets/port_icon.png';
 import reefUrl from '../assets/reef.png';
-import pennantPlayerUrl from '../assets/pennant_player.png';
-import pennantAiUrl from '../assets/pennant_ai.png';
 import woodButtonUrl from '../assets/wood_button.png';
 
 // Convert Vite URL strings to HTMLImageElements for ctx.drawImage()
@@ -42,15 +40,10 @@ function makeImg(url) { const i = new Image(); i.src = url; return i; }
 const sloopImg = makeImg(sloopUrl);
 const brigantineImg = makeImg(brigantineUrl);
 const galleonImg = makeImg(galleonUrl);
-const heartImg = makeImg(heartUrl);
-const bootImg = makeImg(bootUrl);
-const crosscannonImg = makeImg(crosscannonUrl);
 const explosionImg = makeImg(explosionUrl);
 const treasurechestImg = makeImg(treasurechestUrl);
 const portIconImg = makeImg(portIconUrl);
 const reefImg = makeImg(reefUrl);
-const pennantPlayerImg = makeImg(pennantPlayerUrl);
-const pennantAiImg = makeImg(pennantAiUrl);
 const woodButtonImg = makeImg(woodButtonUrl);
 
 const GRID_WIDTH = 10;
@@ -95,13 +88,17 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
   const isAnimatingRef = useRef(false);
   const animationRef = useRef(null);
 
-  // Keep a ref synced with current hoveredHex to avoid stale closures in event handlers
-  hoveredHexRef.current = hoveredHex;
+  // Keep refs synced with the latest values (in effects — writing refs during render is invalid)
+  useEffect(() => {
+    hoveredHexRef.current = hoveredHex;
+  });
 
   // Game state hook
   const game = useGameState({ gameMode: initialMode });
   const gameStateRef = useRef(game);
-  gameStateRef.current = game;
+  useEffect(() => {
+    gameStateRef.current = game;
+  });
 
   // ── Particle effects: movement detection + attack/explosion ──
   useEffect(() => {
@@ -143,7 +140,7 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
     prevAliveRef.current = currentAlive;
   }, [game.units]);
 
-  // ── Explosion effect from lastAttack → spawn cannon impact particles ──
+  // ── Explosion effect from lastAttack → spawn cannon impact particles + damage number ──
   useEffect(() => {
     if (game.lastAttack && game.lastAttack !== prevLastAttackRef.current) {
       prevLastAttackRef.current = game.lastAttack;
@@ -164,16 +161,10 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
         timestamp: game.lastAttack.timestamp,
       });
       const timer = setTimeout(() => setExplosionEffect(null), 500);
-      return () => clearTimeout(timer);
-    }
-  }, [game.lastAttack]);
 
-  // ── Floating damage numbers: spawn on attack ──
-  useEffect(() => {
-    if (game.lastAttack && game.lastAttack !== prevLastAttackRef.current) {
-      // Use the effective damage from lastAttack (already accounts for terrain defense)
+      // Floating damage number (was a separate effect that could never fire:
+      // prevLastAttackRef was already advanced above, so the old guard always skipped)
       const dmg = game.lastAttack.damage || 1;
-      // Determine attacker owner from lastAttack position match
       const attackerAtPos = game.units.find(
         u => u.q === game.lastAttack.aq && u.r === game.lastAttack.ar
       );
@@ -184,11 +175,12 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
         startTime: performance.now(),
         owner: attackerAtPos ? attackerAtPos.owner : 'ai',
       });
-      // Clean old entries
       const now = performance.now();
       damageNumbersRef.current = damageNumbersRef.current.filter(
         d => now - d.startTime < 1200
       );
+
+      return () => clearTimeout(timer);
     }
   }, [game.lastAttack, game.units]);
 
@@ -491,7 +483,7 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
         ctx.strokeRect(barX, barY, barWidth, barHeight);
 
         // Team pennant flag above ship — drawn programmatically with flag color
-        const fColor = isPlayer ? (game.flagColor || '#4488ff') : '#ff6666';
+        const fColor = isPlayer ? (gameStateRef.current.flagColor || '#4488ff') : '#ff6666';
         const poleH = HEX_RADIUS * 0.5;
         const pennantW = HEX_RADIUS * 0.3;
         const pennantH = HEX_RADIUS * 0.4;
@@ -907,9 +899,6 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
       pCtx.restore();
 
       // Clear particle canvas and draw
-      const dpr = window.devicePixelRatio || 1;
-      const w = pCanvas.width / dpr;
-      const h = pCanvas.height / dpr;
       pCtx.save();
       pCtx.setTransform(1, 0, 0, 1, 0, 0); // reset to clear full buffer
       pCtx.clearRect(0, 0, pCanvas.width, pCanvas.height);
@@ -928,14 +917,17 @@ export default function GameBoard({ gameMode: initialMode = 'skirmish' }) {
     };
   }, []);
 
-  // ── Fog of War: track explored hexes ──
+  // ── Fog of War: track explored hexes (visible + recon reveals) ──
   useEffect(() => {
     if (game.visibleHexes) {
       for (const h of game.visibleHexes) {
         exploredHexesRef.current.add(h);
       }
     }
-  }, [game.visibleHexes]);
+    for (const h of game.exploredHexes || []) {
+      exploredHexesRef.current.add(h);
+    }
+  }, [game.visibleHexes, game.exploredHexes]);
 
   // ────────────────────── REDRAW ON HOVER CHANGE ───────────────────────
 

@@ -55,7 +55,7 @@ describe("useGameState — unit types", () => {
 
   it("all units have required stats", () => {
     const requiredKeys = ["maxHp", "maxMovement", "attack", "range", "label"];
-    for (const [name, type] of Object.entries(UNIT_TYPES)) {
+    for (const [, type] of Object.entries(UNIT_TYPES)) {
       for (const key of requiredKeys) {
         expect(type).toHaveProperty(key);
       }
@@ -147,7 +147,6 @@ describe("useGameState — win conditions", () => {
 
   it("AI wins when all player units destroyed", () => {
     const playerUnits = [];
-    const aiUnits = [{ owner: "ai", hp: 4 }];
 
     const playerAlive = playerUnits.filter(u => u.hp > 0);
     const aiWins = playerAlive.length === 0;
