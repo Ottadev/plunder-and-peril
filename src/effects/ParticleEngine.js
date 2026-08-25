@@ -115,33 +115,85 @@ export function getActiveCount() {
 
 // ──────────────────────── EFFECT PRESETS ────────────────────────
 
+// Amber/orange muzzle-flash palette (#f59e0b, #f97316, #fb923c).
+const MUZZLE_COLORS = [
+  { r: 245, g: 158, b: 11 },
+  { r: 249, g: 115, b: 22 },
+  { r: 251, g: 146, b: 60 },
+];
+
+/**
+ * Shared emitter for a radial "burst" of particles at (x, y).
+ *
+ * All effects below reuse this so the acquire/spawn bookkeeping lives in one
+ * place. Each option preserves the exact parameter range of the effect that
+ * used it, so the visual result is unchanged.
+ *
+ * @param {object} o
+ * @param {number} o.count      number of particles to spawn
+ * @param {number} o.x          spawn anchor x
+ * @param {number} o.y          spawn anchor y
+ * @param {number} o.speedMin   radial speed lower bound (px/s)
+ * @param {number} o.speedMax   radial speed upper bound (px/s)
+ * @param {number} o.spread     random spawn jitter (±spread/2 around anchor)
+ * @param {number} o.lifeMin    lifetime lower bound (s)
+ * @param {number} o.lifeMax    lifetime upper bound (s)
+ * @param {number} o.sizeMin    particle size lower bound
+ * @param {number} o.sizeMax    particle size upper bound
+ * @param {string} o.type       'circle' | 'ring' | 'smoke'
+ * @param {number} o.alpha      base opacity
+ * @param {number} o.drag       per-frame velocity damping
+ * @param {number} o.gravity    vertical acceleration (px/s²)
+ * @param {(p: object) => void} o.pickColor  sets p.r/p.g/p.b
+ * @param {(angle: number, speed: number) => number} [o.vy] vertical velocity
+ */
+function emitBurst({
+  count, x, y,
+  speedMin, speedMax, spread,
+  lifeMin, lifeMax,
+  sizeMin, sizeMax,
+  type, alpha, drag, gravity,
+  pickColor,
+  vy = (angle, speed) => Math.sin(angle) * speed,
+}) {
+  for (let i = 0; i < count; i++) {
+    const p = acquire();
+    if (!p) break; // pool full — stop spawning
+    const angle = Math.random() * Math.PI * 2;
+    const speed = speedMin + Math.random() * (speedMax - speedMin);
+    p.x = x + (Math.random() - 0.5) * spread;
+    p.y = y + (Math.random() - 0.5) * spread;
+    p.vx = Math.cos(angle) * speed;
+    p.vy = vy(angle, speed);
+    p.life = lifeMin + Math.random() * (lifeMax - lifeMin);
+    p.maxLife = p.life;
+    p.size = sizeMin + Math.random() * (sizeMax - sizeMin);
+    pickColor(p);
+    p.a = alpha;
+    p.drag = drag;
+    p.gravity = gravity;
+    p.type = type;
+  }
+}
+
 /**
  * Water wake — blue/white particles trailing behind a moving ship.
  * Spawn at (x, y) in canvas coords.
  */
 export function spawnWaterWake(x, y) {
   const count = 6 + Math.floor(Math.random() * 4);
-  for (let i = 0; i < count; i++) {
-    const p = acquire();
-    if (!p) return;
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 15 + Math.random() * 25;
-    p.x = x + (Math.random() - 0.5) * 10;
-    p.y = y + (Math.random() - 0.5) * 10;
-    p.vx = Math.cos(angle) * speed;
-    p.vy = Math.sin(angle) * speed;
-    p.life = 0.6 + Math.random() * 0.5;
-    p.maxLife = p.life;
-    p.size = 2 + Math.random() * 2;
-    // Light blue to white
-    p.r = 140 + Math.floor(Math.random() * 80);
-    p.g = 200 + Math.floor(Math.random() * 55);
-    p.b = 240 + Math.floor(Math.random() * 15);
-    p.a = 0.7;
-    p.drag = 0.96;
-    p.gravity = 0;
-    p.type = 'circle';
-  }
+  emitBurst({
+    count, x, y,
+    speedMin: 15, speedMax: 40, spread: 10,
+    lifeMin: 0.6, lifeMax: 1.1, sizeMin: 2, sizeMax: 4,
+    type: 'circle', alpha: 0.7, drag: 0.96, gravity: 0,
+    pickColor: (p) => {
+      // Light blue to white
+      p.r = 140 + Math.floor(Math.random() * 80);
+      p.g = 200 + Math.floor(Math.random() * 55);
+      p.b = 240 + Math.floor(Math.random() * 15);
+    },
+  });
 }
 
 /**
@@ -149,49 +201,32 @@ export function spawnWaterWake(x, y) {
  */
 export function spawnCannonImpact(x, y) {
   // Shrapnel — orange/yellow fast particles
-  for (let i = 0; i < 10; i++) {
-    const p = acquire();
-    if (!p) break;
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 40 + Math.random() * 80;
-    p.x = x + (Math.random() - 0.5) * 6;
-    p.y = y + (Math.random() - 0.5) * 6;
-    p.vx = Math.cos(angle) * speed;
-    p.vy = Math.sin(angle) * speed;
-    p.life = 0.3 + Math.random() * 0.4;
-    p.maxLife = p.life;
-    p.size = 1.5 + Math.random() * 2;
-    p.r = 255;
-    p.g = 150 + Math.floor(Math.random() * 100);
-    p.b = 20 + Math.floor(Math.random() * 40);
-    p.a = 0.9;
-    p.drag = 0.93;
-    p.gravity = 30;
-    p.type = 'circle';
-  }
+  emitBurst({
+    count: 10, x, y,
+    speedMin: 40, speedMax: 120, spread: 6,
+    lifeMin: 0.3, lifeMax: 0.7, sizeMin: 1.5, sizeMax: 3.5,
+    type: 'circle', alpha: 0.9, drag: 0.93, gravity: 30,
+    pickColor: (p) => {
+      p.r = 255;
+      p.g = 150 + Math.floor(Math.random() * 100);
+      p.b = 20 + Math.floor(Math.random() * 40);
+    },
+  });
 
   // Smoke — grey expanding puffs
-  for (let i = 0; i < 5; i++) {
-    const p = acquire();
-    if (!p) break;
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 10 + Math.random() * 20;
-    p.x = x + (Math.random() - 0.5) * 12;
-    p.y = y + (Math.random() - 0.5) * 12;
-    p.vx = Math.cos(angle) * speed;
-    p.vy = Math.sin(angle) * speed - 10; // slight upward drift
-    p.life = 0.5 + Math.random() * 0.5;
-    p.maxLife = p.life;
-    p.size = 3 + Math.random() * 3;
-    const grey = 100 + Math.floor(Math.random() * 60);
-    p.r = grey;
-    p.g = grey;
-    p.b = grey;
-    p.a = 0.5;
-    p.drag = 0.95;
-    p.gravity = -10;
-    p.type = 'smoke';
-  }
+  emitBurst({
+    count: 5, x, y,
+    speedMin: 10, speedMax: 30, spread: 12,
+    lifeMin: 0.5, lifeMax: 1.0, sizeMin: 3, sizeMax: 6,
+    type: 'smoke', alpha: 0.5, drag: 0.95, gravity: -10,
+    vy: (angle, speed) => Math.sin(angle) * speed - 10, // slight upward drift
+    pickColor: (p) => {
+      const grey = 100 + Math.floor(Math.random() * 60);
+      p.r = grey;
+      p.g = grey;
+      p.b = grey;
+    },
+  });
 }
 
 /**
@@ -200,95 +235,62 @@ export function spawnCannonImpact(x, y) {
  */
 export function spawnShipExplosion(x, y) {
   // Fire core — red/orange burst
-  for (let i = 0; i < 20; i++) {
-    const p = acquire();
-    if (!p) break;
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 30 + Math.random() * 100;
-    p.x = x + (Math.random() - 0.5) * 8;
-    p.y = y + (Math.random() - 0.5) * 8;
-    p.vx = Math.cos(angle) * speed;
-    p.vy = Math.sin(angle) * speed;
-    p.life = 0.4 + Math.random() * 0.6;
-    p.maxLife = p.life;
-    p.size = 2 + Math.random() * 3;
-    p.r = 255;
-    p.g = 80 + Math.floor(Math.random() * 120);
-    p.b = 10 + Math.floor(Math.random() * 30);
-    p.a = 1.0;
-    p.drag = 0.94;
-    p.gravity = 20;
-    p.type = 'circle';
-  }
+  emitBurst({
+    count: 20, x, y,
+    speedMin: 30, speedMax: 130, spread: 8,
+    lifeMin: 0.4, lifeMax: 1.0, sizeMin: 2, sizeMax: 5,
+    type: 'circle', alpha: 1.0, drag: 0.94, gravity: 20,
+    pickColor: (p) => {
+      p.r = 255;
+      p.g = 80 + Math.floor(Math.random() * 120);
+      p.b = 10 + Math.floor(Math.random() * 30);
+    },
+  });
 
   // Debris — brown/dark shrapnel
-  for (let i = 0; i < 15; i++) {
-    const p = acquire();
-    if (!p) break;
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 50 + Math.random() * 80;
-    p.x = x + (Math.random() - 0.5) * 10;
-    p.y = y + (Math.random() - 0.5) * 10;
-    p.vx = Math.cos(angle) * speed;
-    p.vy = Math.sin(angle) * speed;
-    p.life = 0.6 + Math.random() * 0.8;
-    p.maxLife = p.life;
-    p.size = 1.5 + Math.random() * 2;
-    p.r = 100 + Math.floor(Math.random() * 60);
-    p.g = 60 + Math.floor(Math.random() * 40);
-    p.b = 20 + Math.floor(Math.random() * 30);
-    p.a = 0.9;
-    p.drag = 0.96;
-    p.gravity = 50;
-    p.type = 'circle';
-  }
+  emitBurst({
+    count: 15, x, y,
+    speedMin: 50, speedMax: 130, spread: 10,
+    lifeMin: 0.6, lifeMax: 1.4, sizeMin: 1.5, sizeMax: 3.5,
+    type: 'circle', alpha: 0.9, drag: 0.96, gravity: 50,
+    pickColor: (p) => {
+      p.r = 100 + Math.floor(Math.random() * 60);
+      p.g = 60 + Math.floor(Math.random() * 40);
+      p.b = 20 + Math.floor(Math.random() * 30);
+    },
+  });
 
   // Smoke column — rising grey puffs
-  for (let i = 0; i < 8; i++) {
-    const p = acquire();
-    if (!p) break;
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 5 + Math.random() * 15;
-    p.x = x + (Math.random() - 0.5) * 16;
-    p.y = y + (Math.random() - 0.5) * 16;
-    p.vx = Math.cos(angle) * speed;
-    p.vy = -20 - Math.random() * 30; // upward
-    p.life = 0.8 + Math.random() * 0.7;
-    p.maxLife = p.life;
-    p.size = 4 + Math.random() * 4;
-    const grey = 80 + Math.floor(Math.random() * 60);
-    p.r = grey;
-    p.g = grey;
-    p.b = grey;
-    p.a = 0.6;
-    p.drag = 0.97;
-    p.gravity = -15;
-    p.type = 'smoke';
-  }
+  emitBurst({
+    count: 8, x, y,
+    speedMin: 5, speedMax: 20, spread: 16,
+    lifeMin: 0.8, lifeMax: 1.5, sizeMin: 4, sizeMax: 8,
+    type: 'smoke', alpha: 0.6, drag: 0.97, gravity: -15,
+    vy: () => -20 - Math.random() * 30, // upward
+    pickColor: (p) => {
+      const grey = 80 + Math.floor(Math.random() * 60);
+      p.r = grey;
+      p.g = grey;
+      p.b = grey;
+    },
+  });
 }
 
 /**
  * Water ripple — subtle expanding ring on an ocean hex at (x, y).
  */
 export function spawnWaterRipple(x, y) {
-  for (let i = 0; i < 2; i++) {
-    const p = acquire();
-    if (!p) return;
-    p.x = x + (Math.random() - 0.5) * 20;
-    p.y = y + (Math.random() - 0.5) * 20;
-    p.vx = 0;
-    p.vy = 0;
-    p.life = 1.5 + Math.random() * 1.0;
-    p.maxLife = p.life;
-    p.size = 4 + Math.random() * 3;
-    p.r = 100;
-    p.g = 160;
-    p.b = 220;
-    p.a = 0.25;
-    p.drag = 1;
-    p.gravity = 0;
-    p.type = 'ring';
-  }
+  emitBurst({
+    count: 2, x, y,
+    speedMin: 0, speedMax: 0, spread: 20,
+    lifeMin: 1.5, lifeMax: 2.5, sizeMin: 4, sizeMax: 7,
+    type: 'ring', alpha: 0.25, drag: 1, gravity: 0,
+    pickColor: (p) => {
+      p.r = 100;
+      p.g = 160;
+      p.b = 220;
+    },
+  });
 }
 
 /**
@@ -297,31 +299,16 @@ export function spawnWaterRipple(x, y) {
  * Colors: amber/orange palette (#f59e0b, #f97316, #fb923c).
  */
 export function spawnCannonMuzzleFlash(x, y) {
-  const COLORS = [
-    { r: 245, g: 158, b: 11 },  // #f59e0b (amber)
-    { r: 249, g: 115, b: 22 },  // #f97316 (orange)
-    { r: 251, g: 146, b: 60 },  // #fb923c (light orange)
-  ];
-
-  for (let i = 0; i < 12; i++) {
-    const p = acquire();
-    if (!p) break;
-    const angle = Math.random() * Math.PI * 2;
-    const speed = 60 + Math.random() * 120; // 2-6 px/frame
-    p.x = x + (Math.random() - 0.5) * 6;
-    p.y = y + (Math.random() - 0.5) * 6;
-    p.vx = Math.cos(angle) * speed;
-    p.vy = Math.sin(angle) * speed;
-    p.life = 0.3 + Math.random() * 0.1; // ~400ms total
-    p.maxLife = p.life;
-    p.size = 2 + Math.random() * 2; // 2-4px radius
-    const c = COLORS[Math.floor(Math.random() * COLORS.length)];
-    p.r = c.r;
-    p.g = c.g;
-    p.b = c.b;
-    p.a = 1.0;
-    p.drag = 0.94;
-    p.gravity = 0;
-    p.type = 'circle';
-  }
+  emitBurst({
+    count: 12, x, y,
+    speedMin: 60, speedMax: 180, spread: 6,
+    lifeMin: 0.3, lifeMax: 0.4, sizeMin: 2, sizeMax: 4,
+    type: 'circle', alpha: 1.0, drag: 0.94, gravity: 0,
+    pickColor: (p) => {
+      const c = MUZZLE_COLORS[Math.floor(Math.random() * MUZZLE_COLORS.length)];
+      p.r = c.r;
+      p.g = c.g;
+      p.b = c.b;
+    },
+  });
 }

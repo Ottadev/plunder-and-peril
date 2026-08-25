@@ -4,6 +4,7 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   updateParticles,
+  drawParticles,
   getActiveCount,
   spawnWaterWake,
   spawnCannonImpact,
@@ -311,5 +312,119 @@ describe("ParticleEngine — updateParticles edge cases", () => {
     }
     // Should not crash
     expect(getActiveCount()).toBeGreaterThan(0);
+  });
+});
+
+// ── drawParticles (render paths) ──────────────────────────────────────
+
+describe("ParticleEngine — drawParticles", () => {
+  function makeCtx() {
+    const calls = [];
+    return {
+      calls,
+      globalAlpha: 1,
+      fillStyle: "",
+      strokeStyle: "",
+      lineWidth: 0,
+      beginPath() { calls.push("beginPath"); },
+      arc(x, y, r, a0, a1) { calls.push(["arc", x, y, r, a0, a1]); },
+      fill() { calls.push("fill"); },
+      stroke() { calls.push("stroke"); },
+    };
+  }
+
+  it("renders nothing when pool is empty", () => {
+    const ctx = makeCtx();
+    drawParticles(ctx);
+    expect(ctx.calls.length).toBe(0);
+    // globalAlpha reset after draw
+    expect(ctx.globalAlpha).toBe(1);
+  });
+
+  it("renders circle particles via fill+arc", () => {
+    spawnCannonMuzzleFlash(400, 300);
+    const ctx = makeCtx();
+    drawParticles(ctx);
+    // 12 particles, each = beginPath + arc + fill
+    expect(ctx.calls.filter((c) => c === "beginPath").length).toBe(12);
+    expect(ctx.calls.filter((c) => c === "fill").length).toBe(12);
+    // No stroke calls for circle type
+    expect(ctx.calls.filter((c) => c === "stroke").length).toBe(0);
+    expect(ctx.globalAlpha).toBe(1);
+  });
+
+  it("renders ring particles via stroke (water ripple)", () => {
+    spawnWaterRipple(100, 100);
+    const ctx = makeCtx();
+    drawParticles(ctx);
+    // 2 ripples = beginPath + arc + stroke each
+    expect(ctx.calls.filter((c) => c === "beginPath").length).toBe(2);
+    expect(ctx.calls.filter((c) => c === "stroke").length).toBe(2);
+    expect(ctx.calls.filter((c) => c === "fill").length).toBe(0);
+    expect(ctx.globalAlpha).toBe(1);
+  });
+
+  it("renders smoke particles via fill (cannon impact)", () => {
+    spawnCannonImpact(200, 200);
+    const ctx = makeCtx();
+    drawParticles(ctx);
+    // 15 particles: 10 circle + 5 smoke, all drawn via fill
+    const fills = ctx.calls.filter((c) => c === "fill").length;
+    expect(fills).toBe(15);
+    expect(ctx.calls.filter((c) => c === "stroke").length).toBe(0);
+    expect(ctx.globalAlpha).toBe(1);
+  });
+
+  it("skips particles with negligible alpha", () => {
+    // Drop to ~end of life so alpha ≈ 0 → nothing drawn
+    spawnCannonMuzzleFlash(400, 300);
+    updateParticles(0.39); // life 0.3-0.4s, alpha ~0
+    const ctx = makeCtx();
+    drawParticles(ctx);
+    expect(ctx.calls.includes("fill")).toBe(false);
+    expect(ctx.globalAlpha).toBe(1);
+  });
+
+  it("does not crash when mixing all effect types", () => {
+    spawnWaterWake(100, 100);
+    spawnCannonImpact(200, 200);
+    spawnShipExplosion(300, 300);
+    spawnWaterRipple(400, 400);
+    spawnCannonMuzzleFlash(500, 500);
+    updateParticles(0.05);
+    const ctx = makeCtx();
+    drawParticles(ctx);
+    expect(ctx.globalAlpha).toBe(1);
+    // At least the 3 ring particles stroke before fully fading
+    expect(ctx.calls.filter((c) => c === "stroke").length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+// ── Refactor regression guards (shared emitter) ───────────────────────
+
+describe("ParticleEngine — shared emitter regression", () => {
+  it("spawnWaterRipple keeps exactly 2 particles (shared emitter)", () => {
+    spawnWaterRipple(50, 50);
+    expect(getActiveCount()).toBe(2);
+    // Ripples stay put: velocity zero over time
+    updateParticles(1.0);
+    expect(getActiveCount()).toBe(2);
+  });
+
+  it("spawnShipExplosion emits fire + debris + smoke (43)", () => {
+    spawnShipExplosion(300, 300);
+    expect(getActiveCount()).toBeGreaterThanOrEqual(41);
+    expect(getActiveCount()).toBeLessThanOrEqual(43);
+  });
+
+  it("all spawn funcs together fill but cap at 300", () => {
+    for (let i = 0; i < 20; i++) {
+      spawnShipExplosion(100 + i * 10, 100);
+      spawnCannonImpact(200 + i, 200);
+      spawnCannonMuzzleFlash(300 + i, 300);
+    }
+    expect(getActiveCount()).toBeLessThanOrEqual(300);
+    updateParticles(999);
+    expect(getActiveCount()).toBe(0);
   });
 });
