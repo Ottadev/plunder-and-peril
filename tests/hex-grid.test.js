@@ -349,4 +349,44 @@ describe("useHexGrid — pathfinding", () => {
       }
     }
   });
+
+  it("bfsPathTo never routes through impassable terrain", () => {
+    // Whatever path is found, every node must be navigable (movement cost finite).
+    const navigable = [];
+    for (let q = 0; q < 10; q++) {
+      for (let r = 0; r < 10; r++) {
+        if (isNavigableTile(q, r, 10, 10)) navigable.push({ q, r });
+      }
+    }
+    if (navigable.length >= 2) {
+      const path = bfsPathTo(
+        navigable[0].q, navigable[0].r,
+        navigable[navigable.length - 1].q, navigable[navigable.length - 1].r,
+        20, new Set(), 10, 10
+      );
+      if (path) {
+        for (const node of path) {
+          expect(getMovementCost(getTileTerrain(node.q, node.r))).toBe(1);
+        }
+      }
+    }
+  });
+});
+
+// ── Refactor invariants ─────────────────────────────────────────────
+
+describe("useHexGrid — refactor invariants", () => {
+  beforeEach(() => {
+    setMap(42, 10, 10);
+  });
+
+  it("isNavigableTile agrees with getMovementCost === 1 across the map", () => {
+    // bfsPathTo's terrain gate relies on this equivalence (it uses cost only).
+    for (let q = 0; q < 10; q++) {
+      for (let r = 0; r < 10; r++) {
+        const terrain = getTileTerrain(q, r);
+        expect(isNavigableTile(q, r, 10, 10)).toBe(getMovementCost(terrain) === 1);
+      }
+    }
+  });
 });

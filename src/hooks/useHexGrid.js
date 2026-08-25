@@ -7,6 +7,9 @@ const HEX_DIRECTIONS = [
   { q: 1, r: -1 }, { q: -1, r: 1 },
 ];
 
+/** Canonical string key for a hex coordinate (used by BFS visited sets/maps). */
+const hexKey = (q, r) => `${q},${r}`;
+
 // ── Terrain types ──────────────────────────────────────────────────────
 
 export const TERRAIN = {
@@ -242,9 +245,8 @@ function isOnEdge(c, r, width, height) {
  */
 function distanceToNearest(grid, c, r, width, height, predicate) {
   const visited = new Set();
-  const key = (x, y) => `${x},${y}`;
   const queue = [{ c, r, dist: 0 }];
-  visited.add(key(c, r));
+  visited.add(hexKey(c, r));
 
   while (queue.length > 0) {
     const cur = queue.shift();
@@ -254,7 +256,7 @@ function distanceToNearest(grid, c, r, width, height, predicate) {
     for (const d of HEX_DIRECTIONS) {
       const nc = cur.c + d.q;
       const nr = cur.r + d.r;
-      const k = key(nc, nr);
+      const k = hexKey(nc, nr);
       if (isWithinBounds(nc, nr, width, height) && !visited.has(k)) {
         visited.add(k);
         queue.push({ c: nc, r: nr, dist: cur.dist + 1 });
@@ -466,9 +468,8 @@ export function getTerrainDefense(terrain) {
  * Returns an array of {q, r} hexes from start to target (inclusive), or null if unreachable.
  */
 export function bfsPathTo(startQ, startR, targetQ, targetR, maxCost, occupied, gridW = 10, gridH = 10) {
-  const key = (q, r) => `${q},${r}`;
-  const startKey = key(startQ, startR);
-  const targetKey = key(targetQ, targetR);
+  const startKey = hexKey(startQ, startR);
+  const targetKey = hexKey(targetQ, targetR);
 
   if (startKey === targetKey) return [{ q: startQ, r: startR }];
 
@@ -478,17 +479,18 @@ export function bfsPathTo(startQ, startR, targetQ, targetR, maxCost, occupied, g
 
   while (queue.length > 0) {
     const current = queue.shift();
-    const currentKey = key(current.q, current.r);
+    const currentKey = hexKey(current.q, current.r);
     const currentEntry = visited.get(currentKey);
 
     const neighbors = getHexNeighbors(current.q, current.r);
     for (const n of neighbors) {
-      const nKey = key(n.q, n.r);
+      const nKey = hexKey(n.q, n.r);
       if (visited.has(nKey)) continue;
       if (!isWithinBounds(n.q, n.r, gridW, gridH)) continue;
       if (occupied.has(nKey) && nKey !== targetKey) continue;
-      if (!isNavigableTile(n.q, n.r, gridW, gridH)) continue;
 
+      // Single terrain fetch feeds both the movement-cost gate and cost math,
+      // and cost === Infinity reports the same set of tiles isNavigableTile rejects.
       const terrain = getTileTerrain(n.q, n.r);
       const cost = getMovementCost(terrain);
       if (cost === Infinity) continue;
