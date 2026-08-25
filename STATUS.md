@@ -53,3 +53,24 @@ Tutte le sprite in `src/assets/`, generate con NanoBanana 2 su Google AI Studio
 ### Build
 `npm run build` — 35 moduli, ~280ms
 Dev server: `npm run dev -- --host 0.0.0.0` (porta 5173)
+
+### Changelog Tecnico — Round Simplify (25/08/2026)
+Refactor interno behavior-preserving (campagna simplify-code, Round 1). Nessuna
+variazione a meccaniche, seed, procedural o suoni. Test: **88 → 117** (4 file).
+
+| File | Intervento | Test |
+|------|-----------|------|
+| `src/hooks/useHexGrid.js` | dedup `hexKey`; BFS con singolo fetch terreno nel gate navigabilità | 28 → 30 |
+| `src/effects/ParticleEngine.js` | `emitBurst` condiviso (300→240 righe, −160 di dup), hoist `MUZZLE_COLORS` | 28 → 37 |
+| `src/hooks/useGameState.js` | 5 helper puri esportati: `hexDistance` (dedup 6×), `occupiedHexSet`, `shuffle` (3×), `pickPositions`, `getWaveTypes`; rimosso commento orfano | 32 → 39 |
+| `src/effects/AudioEngine.js` | `scheduleTone` condiviso, `playAbility` dedup + gestione errori coerente (vedi note testabilità) | 0 → 11 |
+
+**Nota testabilità** — `AudioEngine`: in environment node non è testabile la
+*costruzione* del vero `AudioContext` nel ramo `!audioCtx` (la singletone è
+già istanziata al primo test col mock); il comportamento no-op su WebAudio
+assente è comunque coperto facendo throware `createOscillator`.
+
+**Fix flaky**: in `particle-engine.test.js` il test "skips negligible alpha"
+usava `dt=0.39` con `life` random in `[0.3,0.4]` → una particella `maxLife=0.4`
+poteva restare ad `alpha=0.025≥0.01` e venire disegnata (rosso a seconda del
+seed). Reso deterministico con `dt=0.45` (azzera `life≤0`). 10/10 run verdi.
