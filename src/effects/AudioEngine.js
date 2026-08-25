@@ -21,6 +21,30 @@ function getCtx() {
 }
 
 /**
+ * Schedule a single oscillator tone plus its gain/connect envelope.
+ * Shared by playTone and playAbility — preserves the exact sound by taking
+ * explicit ramp endpoints and timings.
+ */
+function scheduleTone({ freq, freqEnd, freqRampTime, duration, type, vol, decay }) {
+  const ctx = getCtx();
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, ctx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(freqEnd, ctx.currentTime + freqRampTime);
+
+  gain.gain.setValueAtTime(vol, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + decay);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.start(ctx.currentTime);
+  osc.stop(ctx.currentTime + duration);
+}
+
+/**
  * Play a short percussive tone.
  * @param {number} freq - base frequency in Hz
  * @param {number} duration - in seconds
@@ -30,23 +54,8 @@ function getCtx() {
  */
 function playTone(freq, duration, type = 'square', vol = 0.12, decay = 0.08) {
   try {
-    const ctx = getCtx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-
-    osc.type = type;
-    osc.frequency.setValueAtTime(freq, ctx.currentTime);
     // Pitch drop for impact feel
-    osc.frequency.exponentialRampToValueAtTime(freq * 0.4, ctx.currentTime + duration);
-
-    gain.gain.setValueAtTime(vol, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + decay);
-
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + duration);
+    scheduleTone({ freq, freqEnd: freq * 0.4, freqRampTime: duration, duration, type, vol, decay });
   } catch { /* audio not available */ }
 }
 
@@ -104,20 +113,11 @@ export function playMove() {
 
 /** Ability activation: rising magical tone */
 export function playAbility() {
-  const ctx = getCtx();
   try {
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(300, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(800, ctx.currentTime + 0.3);
-    gain.gain.setValueAtTime(0.08, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(ctx.currentTime);
-    osc.stop(ctx.currentTime + 0.4);
-  } catch { /* */ }
+    scheduleTone({
+      freq: 300, freqEnd: 800, freqRampTime: 0.3, duration: 0.4, type: 'sine', vol: 0.08, decay: 0.4,
+    });
+  } catch { /* audio not available */ }
 }
 
 /** UI click feedback */
