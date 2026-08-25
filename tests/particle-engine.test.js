@@ -376,9 +376,11 @@ describe("ParticleEngine — drawParticles", () => {
   });
 
   it("skips particles with negligible alpha", () => {
-    // Drop to ~end of life so alpha ≈ 0 → nothing drawn
+    // Deterministic: advance past maxLife (0.4s) so every particle is either
+    // inactive or below the alpha<0.01 skip threshold — no dependence on the
+    // random life (a dt of 0.39 could leave a maxLife=0.4 particle at 0.025).
     spawnCannonMuzzleFlash(400, 300);
-    updateParticles(0.39); // life 0.3-0.4s, alpha ~0
+    updateParticles(0.45); // life ∈ [0.3, 0.4] → all ≤ 0 after tick
     const ctx = makeCtx();
     drawParticles(ctx);
     expect(ctx.calls.includes("fill")).toBe(false);
