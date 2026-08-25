@@ -63,6 +63,57 @@ function createUnit(type, owner, q, r, customName) {
   };
 }
 
+/** Hex distance between two axial coordinates (max of |dq|,|dr|,|ds|). */
+export function hexDistance(q1, r1, q2, r2) {
+  const dq = Math.abs(q2 - q1);
+  const dr = Math.abs(r2 - r1);
+  const ds = Math.abs((-q2 - r2) - (-q1 - r1));
+  return Math.max(dq, dr, ds);
+}
+
+/** Build the set of "q,r" hexes occupied by live units, optionally excluding one unit. */
+export function occupiedHexSet(units, excludeUnitId) {
+  const occupied = new Set();
+  units.forEach(u => {
+    if (u.id !== excludeUnitId && u.hp > 0) {
+      occupied.add(`${u.q},${u.r}`);
+    }
+  });
+  return occupied;
+}
+
+/** In-place Fisher–Yates shuffle. Returns the same array for chaining. */
+export function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+/** Pick `count` evenly-spaced tiles from a candidate list (falls back to slice). */
+export function pickPositions(tiles, count) {
+  if (tiles.length >= count) {
+    const step = (tiles.length - 1) / Math.max(count - 1, 1);
+    const selected = [];
+    for (let i = 0; i < count; i++) {
+      selected.push(tiles[Math.round(i * step)]);
+    }
+    return selected;
+  }
+  return tiles.slice(0, count);
+}
+
+/** Wave enemy composition grows with the wave number. */
+export function getWaveTypes(wave) {
+  const types = ['sloop'];
+  if (wave >= 2) types.push('sloop', 'brigantine');
+  if (wave >= 4) types.push('brigantine');
+  if (wave >= 6) types.push('galleon');
+  if (wave >= 8) { types.push('galleon'); types.push('brigantine'); }
+  return types;
+}
+
 /**
  * Find all navigable spawn tiles (ocean or shallow) within a given column range.
  */
@@ -89,22 +140,8 @@ function createInitialUnits(flagshipName) {
   const rightTiles = findOceanTilesInColumns(6, 9);
 
   // Spread units out across available ocean tiles
-  function getPositions(tiles, count) {
-    // Take evenly-spaced tiles from the available pool
-    if (tiles.length >= count) {
-      const step = (tiles.length - 1) / Math.max(count - 1, 1);
-      const selected = [];
-      for (let i = 0; i < count; i++) {
-        selected.push(tiles[Math.round(i * step)]);
-      }
-      return selected;
-    }
-    // Fallback: if not enough ocean tiles, use first available
-    return tiles.slice(0, count);
-  }
-
-  const playerPositions = getPositions(leftTiles, 3);
-  const aiPositions = getPositions(rightTiles, 3);
+  const playerPositions = pickPositions(leftTiles, 3);
+  const aiPositions = pickPositions(rightTiles, 3);
 
   return [
     // Player units
@@ -148,10 +185,7 @@ function generateTreasures(unitPositions) {
   const available = candidates.filter(t => !occupiedSet.has(`${t.q},${t.r}`));
 
   // Shuffle available tiles using Fisher-Yates
-  for (let i = available.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [available[i], available[j]] = [available[j], available[i]];
-  }
+  shuffle(available);
 
   // Pick 1-3 treasures, biased toward 2-3 for meaningful gameplay
   const count = Math.min(available.length, 1 + Math.floor(Math.random() * 3));
@@ -200,12 +234,7 @@ function computeVisibleHexes(units, visionRange = 2) {
  * terrain costs, and occupancy.
  */
 function bfsValidMoves(unit, allUnits) {
-  const occupied = new Set();
-  allUnits.forEach(u => {
-    if (u.id !== unit.id && u.hp > 0) {
-      occupied.add(`${u.q},${u.r}`);
-    }
-  });
+  const occupied = occupiedHexSet(allUnits, unit.id);
 
   const visited = new Set();
   const reachable = [];
@@ -255,10 +284,7 @@ function getValidTargets(unit, allUnits) {
   return allUnits.filter(u => {
     if (u.owner === unit.owner || u.hp <= 0) return false;
     // Calculate hex distance (axial → cube distance)
-    const dq = Math.abs(u.q - unit.q);
-    const dr = Math.abs(u.r - unit.r);
-    const ds = Math.abs((-u.q - u.r) - (-unit.q - unit.r));
-    const dist = Math.max(dq, dr, ds);
+    const dist = hexDistance(unit.q, unit.r, u.q, u.r);
     return dist <= unit.range;
   });
 }
@@ -319,18 +345,7 @@ function createInitialGameState(mode = 'skirmish') {
   if (mode === 'waveDefense') {
     // Wave Defense: player ships on left, no initial AI, no treasures
     const leftTiles = findOceanTilesInColumns(0, 3);
-    function getPositions(tiles, count) {
-      if (tiles.length >= count) {
-        const step = (tiles.length - 1) / Math.max(count - 1, 1);
-        const selected = [];
-        for (let i = 0; i < count; i++) {
-          selected.push(tiles[Math.round(i * step)]);
-        }
-        return selected;
-      }
-      return tiles.slice(0, count);
-    }
-    const playerPos = getPositions(leftTiles, 3);
+    const playerPos = pickPositions(leftTiles, 3);
     const flagshipName = CUSTOM_DEFAULTS.flagshipName || 'Sea Serpent';
     const units = [
       createUnit('galleon',    'player', playerPos[0].q, playerPos[0].r, flagshipName),
@@ -392,9 +407,6 @@ function createInitialGameState(mode = 'skirmish') {
 }
 
 /**
- * Custom hook for managing all game state.
- */
-/**
  * Read high score from localStorage.
  */
 function getHighScore() {
@@ -438,20 +450,13 @@ function spawnWaveUnits(wave, currentUnits) {
   }
 
   // Shuffle
-  for (let i = tiles.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [tiles[i], tiles[j]] = [tiles[j], tiles[i]];
-  }
+  shuffle(tiles);
 
   // Determine count & composition
   const count = Math.min(2 + Math.floor(wave * 0.6), 8);
 
   // Composition grows with waves
-  const types = ['sloop'];
-  if (wave >= 2) types.push('sloop', 'brigantine');
-  if (wave >= 4) types.push('brigantine');
-  if (wave >= 6) types.push('galleon');
-  if (wave >= 8) { types.push('galleon'); types.push('brigantine'); }
+  const types = getWaveTypes(wave);
 
   const units = [];
   const spawnCount = Math.min(count, tiles.length);
@@ -589,12 +594,7 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
     if (!canMove) return null;
 
     // Build occupied set (excluding the moving unit itself)
-    const occupied = new Set();
-    prev.units.forEach(u => {
-      if (u.id !== unit.id && u.hp > 0) {
-        occupied.add(`${u.q},${u.r}`);
-      }
-    });
+    const occupied = occupiedHexSet(prev.units, unit.id);
 
     // Compute BFS path
     const path = bfsPathTo(
@@ -681,10 +681,7 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
       if (!target || target.owner === unit.owner || target.hp <= 0) return prev;
 
       // Check range
-      const dq = Math.abs(target.q - unit.q);
-      const dr = Math.abs(target.r - unit.r);
-      const ds = Math.abs((-target.q - target.r) - (-unit.q - unit.r));
-      const dist = Math.max(dq, dr, ds);
+      const dist = hexDistance(unit.q, unit.r, target.q, target.r);
       if (dist > unit.range) return prev;
 
       // Apply damage with terrain defense reduction
@@ -802,10 +799,7 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
         let nearest = null;
         let nearestDist = Infinity;
         for (const pt of playerTargets) {
-          const dq = Math.abs(pt.q - aiUnit.q);
-          const dr = Math.abs(pt.r - aiUnit.r);
-          const ds = Math.abs((-pt.q - pt.r) - (-aiUnit.q - aiUnit.r));
-          const dist = Math.max(dq, dr, ds);
+          const dist = hexDistance(aiUnit.q, aiUnit.r, pt.q, pt.r);
           if (dist < nearestDist) {
             nearestDist = dist;
             nearest = pt;
@@ -832,20 +826,14 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
                 // Flee: move away from nearest player
                 let bestDist = 0;
                 for (const m of moves) {
-                  const dq2 = Math.abs(nearest.q - m.q);
-                  const dr2 = Math.abs(nearest.r - m.r);
-                  const ds2 = Math.abs((-nearest.q - nearest.r) - (-m.q - m.r));
-                  const dist2 = Math.max(dq2, dr2, ds2);
+                  const dist2 = hexDistance(m.q, m.r, nearest.q, nearest.r);
                   if (dist2 > bestDist) { bestDist = dist2; bestMove = m; }
                 }
               } else {
                 // Move toward (normal behavior)
                 let bestDist = nearestDist;
                 for (const m of moves) {
-                  const dq2 = Math.abs(nearest.q - m.q);
-                  const dr2 = Math.abs(nearest.r - m.r);
-                  const ds2 = Math.abs((-nearest.q - nearest.r) - (-m.q - m.r));
-                  const dist2 = Math.max(dq2, dr2, ds2);
+                  const dist2 = hexDistance(m.q, m.r, nearest.q, nearest.r);
                   if (dist2 < bestDist) { bestDist = dist2; bestMove = m; }
                 }
               }
@@ -905,10 +893,7 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
           let bestMove = null;
           let bestDist = nearestDist;
           for (const m of moves) {
-            const dq2 = Math.abs(nearest.q - m.q);
-            const dr2 = Math.abs(nearest.r - m.r);
-            const ds2 = Math.abs((-nearest.q - nearest.r) - (-m.q - m.r));
-            const dist2 = Math.max(dq2, dr2, ds2);
+            const dist2 = hexDistance(m.q, m.r, nearest.q, nearest.r);
             // Only consider moves that actually get us closer
             if (dist2 < bestDist) {
               bestDist = dist2;
@@ -1116,7 +1101,7 @@ export function useGameState({ gameMode = 'skirmish' } = {}) {
             while (queue.length > 0) { const cur = queue.shift(); visible.add(`${cur.q},${cur.r}`); if (cur.dist >= 3) continue;
               for (const n of getHexNeighbors(cur.q, cur.r)) { const nk = `${n.q},${n.r}`; if (visited.has(nk) || !isWithinBounds(n.q,n.r,GRID_WIDTH,GRID_HEIGHT)) continue; visited.add(nk); queue.push({q:n.q,r:n.r,dist:cur.dist+1}); } }
             const unexplored = [...visible].filter(h => !prev.exploredHexes.includes(h));
-            for (let i = unexplored.length-1; i>0; i--) { const j = Math.floor(Math.random()*(i+1)); [unexplored[i],unexplored[j]]=[unexplored[j],unexplored[i]]; }
+            shuffle(unexplored);
             return { ...prev, exploredHexes: [...prev.exploredHexes, ...unexplored.slice(0,3)],
               units: updatedUnits.map(u => u.id===unit.id ? {...u,abilityReady:false,abilityCooldownTurns:def.abilityCooldown,movementPoints:0,attacked:true} : u) };
           }

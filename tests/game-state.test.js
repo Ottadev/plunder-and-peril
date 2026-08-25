@@ -350,3 +350,90 @@ describe("useGameState — customization", () => {
     }
   });
 });
+
+// ── Pure Helpers (extracted by simplify) ─────────────────────────────
+
+describe("useGameState — pure helpers", () => {
+  let hexDistance, occupiedHexSet, pickPositions, getWaveTypes;
+  beforeAll(async () => {
+    const mod = await import("../src/hooks/useGameState.js");
+    hexDistance = mod.hexDistance;
+    occupiedHexSet = mod.occupiedHexSet;
+    pickPositions = mod.pickPositions;
+    getWaveTypes = mod.getWaveTypes;
+  });
+
+  it("hexDistance matches axial cube-distance", () => {
+    expect(hexDistance(0, 0, 1, 0)).toBe(1);
+    expect(hexDistance(0, 0, 0, 1)).toBe(1);
+    expect(hexDistance(0, 0, 1, -1)).toBe(1);
+    expect(hexDistance(0, 0, 2, 0)).toBe(2);
+    expect(hexDistance(0, 0, 3, 2)).toBe(5); // max(|3|,|2|,|−5|)
+    expect(hexDistance(0, 0, 0, 0)).toBe(0);
+    // Symmetric
+    expect(hexDistance(1, 0, 0, 0)).toBe(hexDistance(0, 0, 1, 0));
+  });
+
+  it("occupiedHexSet keeps only live hexes and excludes the reference unit", () => {
+    const units = [
+      { id: "u1", q: 0, r: 0, hp: 4 },
+      { id: "u2", q: 1, r: 0, hp: 0 }, // dead → excluded
+      { id: "u3", q: 2, r: 2, hp: 6 },
+    ];
+    const set = occupiedHexSet(units, "u1");
+    expect(set.has("0,0")).toBe(false); // excluded ref unit
+    expect(set.has("1,0")).toBe(false); // dead
+    expect(set.has("2,2")).toBe(true);
+    expect(set.size).toBe(1);
+    // No exclusion: own hex included
+    const noExcl = occupiedHexSet(units);
+    expect(noExcl.has("0,0")).toBe(true);
+    expect(noExcl.has("2,2")).toBe(true);
+    expect(noExcl.size).toBe(2);
+  });
+
+  it("pickPositions returns evenly-spaced tiles when enough are available", () => {
+    const tiles = [
+      { q: 0, r: 0 }, { q: 1, r: 0 }, { q: 2, r: 0 },
+      { q: 3, r: 0 }, { q: 4, r: 0 }, { q: 5, r: 0 },
+    ];
+    const picks = pickPositions(tiles, 3);
+    expect(picks).toHaveLength(3);
+    // First and last are preserved (spread across the pool)
+    expect(picks[0]).toEqual({ q: 0, r: 0 });
+    expect(picks[2]).toEqual({ q: 5, r: 0 });
+  });
+
+  it("pickPositions falls back to slice when pool is too small", () => {
+    const tiles = [{ q: 0, r: 0 }, { q: 1, r: 0 }];
+    expect(pickPositions(tiles, 5)).toEqual(tiles);
+    expect(pickPositions(tiles, 1)).toHaveLength(1);
+  });
+
+  it("getWaveTypes expands composition with wave number", () => {
+    expect(getWaveTypes(1)).toEqual(["sloop"]);
+    expect(getWaveTypes(3)).toEqual(["sloop", "sloop", "brigantine"]);
+    expect(getWaveTypes(10)).toEqual([
+      "sloop", "sloop", "brigantine", "brigantine",
+      "galleon", "galleon", "brigantine",
+    ]);
+  });
+
+  it("shuffle preserves elements (length + multiset)", async () => {
+    const mod = await import("../src/hooks/useGameState.js");
+    const shuffle = mod.shuffle;
+    const arr = [1, 2, 3, 4, 5];
+    const shuffled = shuffle([...arr]);
+    expect(shuffled).toHaveLength(5);
+    expect([...shuffled].sort((a, b) => a - b)).toEqual(arr);
+  });
+
+  it("shuffle mutates and returns the same array reference", async () => {
+    const mod = await import("../src/hooks/useGameState.js");
+    const shuffle = mod.shuffle;
+    const arr = ["a", "b"];
+    const out = shuffle(arr);
+    expect(out).toBe(arr);
+    expect(arr).toEqual(out);
+  });
+});
